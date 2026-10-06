@@ -11,6 +11,67 @@ internal static class BcEncoderSimd
 
     public static bool IsSupported => Vector256.IsHardwareAccelerated;
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public static void EncodeRow(BcEncoder.BlockKind kind, ReadOnlySpan<byte> src, int width, int height, int by, int blocksX, Span<byte> row, int alphaThreshold)
+    {
+        int blockSize = kind is BcEncoder.BlockKind.Bc1 or BcEncoder.BlockKind.Bc4 ? 8 : 16;
+        Span<byte> blocks = stackalloc byte[64 * Lanes];
+        Span<Vector256<int>> r = stackalloc Vector256<int>[16];
+        Span<Vector256<int>> g = stackalloc Vector256<int>[16];
+        Span<Vector256<int>> b = stackalloc Vector256<int>[16];
+        Span<Vector256<int>> a = stackalloc Vector256<int>[16];
+
+        for (int bx = 0; bx < blocksX; bx += Lanes)
+        {
+            int count = Math.Min(Lanes, blocksX - bx);
+
+            for (int lane = 0; lane < Lanes; lane++)
+            {
+                BcEncoder.GatherBlock(src, width, height, (bx + Math.Min(lane, count - 1)) * 4, by * 4, blocks.Slice(lane * 64, 64));
+            }
+
+            Load(blocks, r, g, b, a);
+            Span<byte> dest = row[(bx * blockSize)..];
+
+            switch (kind)
+            {
+                case BcEncoder.BlockKind.Bc1:
+                    if (alphaThreshold > 0)
+                    {
+                        for (int lane = 0; lane < count; lane++)
+                        {
+                            BcEncoder.CompressColorBlock(blocks.Slice(lane * 64, 64), dest.Slice(lane * 8, 8), false, alphaThreshold);
+                        }
+                    }
+                    else
+                    {
+                        WriteColorBlocks(blocks, r, g, b, count, dest, 8);
+                    }
+
+                    break;
+                case BcEncoder.BlockKind.Bc2:
+                    for (int lane = 0; lane < count; lane++)
+                    {
+                        BcEncoder.CompressExplicitAlphaBlock(blocks.Slice(lane * 64, 64), dest.Slice(lane * 16, 8));
+                    }
+
+                    WriteColorBlocks(blocks, r, g, b, count, dest[8..], 16);
+                    break;
+                case BcEncoder.BlockKind.Bc3:
+                    EncodeSingleChannel(a, count, dest, 16);
+                    WriteColorBlocks(blocks, r, g, b, count, dest[8..], 16);
+                    break;
+                case BcEncoder.BlockKind.Bc4:
+                    EncodeSingleChannel(r, count, dest, 8);
+                    break;
+                case BcEncoder.BlockKind.Bc5:
+                    EncodeSingleChannel(r, count, dest, 16);
+                    EncodeSingleChannel(g, count, dest[8..], 16);
+                    break;
+            }
+        }
+    }
+
     private struct Endpoints
     {
         public Vector256<int> R0, G0, B0, R1, G1, B1;

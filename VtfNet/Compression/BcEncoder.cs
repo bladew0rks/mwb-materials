@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
-using System.Runtime.Intrinsics;
 
 namespace VtfNet.Compression;
 
@@ -21,169 +20,136 @@ public static class BcEncoder
     public static byte[] EncodeBc1(ReadOnlySpan<byte> rgba, int width, int height, int alphaThreshold = 0, bool parallel = true)
     {
         byte[] output = new byte[GetCompressedSize(width, height, 8)];
-        EncodeBlocks<Bc1Block>(rgba, width, height, output, 0, alphaThreshold, parallel, BcEncoderSimd.IsSupported);
+        EncodeBlocks<Bc1Block>(rgba, width, height, output, 0, alphaThreshold, parallel, PreferredSimdWidth);
         return output;
     }
 
     public static byte[] EncodeBc2(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true)
     {
         byte[] output = new byte[GetCompressedSize(width, height, 16)];
-        EncodeBlocks<Bc2Block>(rgba, width, height, output, 0, 0, parallel, BcEncoderSimd.IsSupported);
+        EncodeBlocks<Bc2Block>(rgba, width, height, output, 0, 0, parallel, PreferredSimdWidth);
         return output;
     }
 
     public static byte[] EncodeBc3(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true)
     {
         byte[] output = new byte[GetCompressedSize(width, height, 16)];
-        EncodeBlocks<Bc3Block>(rgba, width, height, output, 0, 0, parallel, BcEncoderSimd.IsSupported);
+        EncodeBlocks<Bc3Block>(rgba, width, height, output, 0, 0, parallel, PreferredSimdWidth);
         return output;
     }
 
     public static byte[] EncodeBc4(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true)
     {
         byte[] output = new byte[GetCompressedSize(width, height, 8)];
-        EncodeBlocks<Bc4Block>(rgba, width, height, output, 0, 0, parallel, BcEncoderSimd.IsSupported);
+        EncodeBlocks<Bc4Block>(rgba, width, height, output, 0, 0, parallel, PreferredSimdWidth);
         return output;
     }
 
     public static byte[] EncodeBc5(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true)
     {
         byte[] output = new byte[GetCompressedSize(width, height, 16)];
-        EncodeBlocks<Bc5Block>(rgba, width, height, output, 0, 0, parallel, BcEncoderSimd.IsSupported);
+        EncodeBlocks<Bc5Block>(rgba, width, height, output, 0, 0, parallel, PreferredSimdWidth);
         return output;
     }
 
     public static void Encode(VtfImageFormat format, ReadOnlySpan<byte> rgba, int width, int height, byte[] output, int outputOffset, int alphaThreshold = 0, bool parallel = true)
     {
-        bool simd = BcEncoderSimd.IsSupported;
+        int simdWidth = PreferredSimdWidth;
 
         switch (format)
         {
             case VtfImageFormat.DXT1:
-                EncodeBlocks<Bc1Block>(rgba, width, height, output, outputOffset, 0, parallel, simd);
+                EncodeBlocks<Bc1Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
                 break;
             case VtfImageFormat.DXT1OneBitAlpha:
-                EncodeBlocks<Bc1Block>(rgba, width, height, output, outputOffset, Math.Max(1, alphaThreshold), parallel, simd);
+                EncodeBlocks<Bc1Block>(rgba, width, height, output, outputOffset, Math.Max(1, alphaThreshold), parallel, simdWidth);
                 break;
             case VtfImageFormat.DXT3:
-                EncodeBlocks<Bc2Block>(rgba, width, height, output, outputOffset, 0, parallel, simd);
+                EncodeBlocks<Bc2Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
                 break;
             case VtfImageFormat.DXT5:
-                EncodeBlocks<Bc3Block>(rgba, width, height, output, outputOffset, 0, parallel, simd);
+                EncodeBlocks<Bc3Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
                 break;
             case VtfImageFormat.ATI1N:
-                EncodeBlocks<Bc4Block>(rgba, width, height, output, outputOffset, 0, parallel, simd);
+                EncodeBlocks<Bc4Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
                 break;
             case VtfImageFormat.ATI2N:
-                EncodeBlocks<Bc5Block>(rgba, width, height, output, outputOffset, 0, parallel, simd);
+                EncodeBlocks<Bc5Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
                 break;
             default:
                 throw new ArgumentException("Not a block-compressed format: " + format, nameof(format));
         }
     }
 
+    internal enum BlockKind
+    {
+        Bc1,
+        Bc2,
+        Bc3,
+        Bc4,
+        Bc5,
+    }
+
     private interface IBlockEncoder
     {
         static abstract int BlockSize { get; }
+        static abstract BlockKind Kind { get; }
         static abstract void Encode(ReadOnlySpan<byte> block, Span<byte> dest, int alphaThreshold);
-
-        static abstract void EncodeBatch(ReadOnlySpan<byte> blocks, ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g,
-            ReadOnlySpan<Vector256<int>> b, ReadOnlySpan<Vector256<int>> a, int count, Span<byte> dest, int alphaThreshold);
     }
 
     private struct Bc1Block : IBlockEncoder
     {
         public static int BlockSize => 8;
+        public static BlockKind Kind => BlockKind.Bc1;
         public static void Encode(ReadOnlySpan<byte> block, Span<byte> dest, int alphaThreshold) => CompressColorBlock(block, dest, false, alphaThreshold);
-
-        public static void EncodeBatch(ReadOnlySpan<byte> blocks, ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g,
-            ReadOnlySpan<Vector256<int>> b, ReadOnlySpan<Vector256<int>> a, int count, Span<byte> dest, int alphaThreshold)
-        {
-            if (alphaThreshold > 0)
-            {
-                for (int lane = 0; lane < count; lane++)
-                {
-                    Encode(blocks.Slice(lane * 64, 64), dest.Slice(lane * 8, 8), alphaThreshold);
-                }
-
-                return;
-            }
-
-            BcEncoderSimd.WriteColorBlocks(blocks, r, g, b, count, dest, 8);
-        }
     }
 
     private struct Bc2Block : IBlockEncoder
     {
         public static int BlockSize => 16;
+        public static BlockKind Kind => BlockKind.Bc2;
 
         public static void Encode(ReadOnlySpan<byte> block, Span<byte> dest, int alphaThreshold)
         {
             CompressExplicitAlphaBlock(block, dest[..8]);
             CompressColorBlock(block, dest[8..], true, 0);
         }
-
-        public static void EncodeBatch(ReadOnlySpan<byte> blocks, ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g,
-            ReadOnlySpan<Vector256<int>> b, ReadOnlySpan<Vector256<int>> a, int count, Span<byte> dest, int alphaThreshold)
-        {
-            for (int lane = 0; lane < count; lane++)
-            {
-                CompressExplicitAlphaBlock(blocks.Slice(lane * 64, 64), dest.Slice(lane * 16, 8));
-            }
-
-            BcEncoderSimd.WriteColorBlocks(blocks, r, g, b, count, dest[8..], 16);
-        }
     }
 
     private struct Bc3Block : IBlockEncoder
     {
         public static int BlockSize => 16;
+        public static BlockKind Kind => BlockKind.Bc3;
 
         public static void Encode(ReadOnlySpan<byte> block, Span<byte> dest, int alphaThreshold)
         {
             CompressSingleChannelBlock(block, 3, dest[..8]);
             CompressColorBlock(block, dest[8..], true, 0);
         }
-
-        public static void EncodeBatch(ReadOnlySpan<byte> blocks, ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g,
-            ReadOnlySpan<Vector256<int>> b, ReadOnlySpan<Vector256<int>> a, int count, Span<byte> dest, int alphaThreshold)
-        {
-            BcEncoderSimd.EncodeSingleChannel(a, count, dest, 16);
-            BcEncoderSimd.WriteColorBlocks(blocks, r, g, b, count, dest[8..], 16);
-        }
     }
 
     private struct Bc4Block : IBlockEncoder
     {
         public static int BlockSize => 8;
+        public static BlockKind Kind => BlockKind.Bc4;
         public static void Encode(ReadOnlySpan<byte> block, Span<byte> dest, int alphaThreshold) => CompressSingleChannelBlock(block, 0, dest);
-
-        public static void EncodeBatch(ReadOnlySpan<byte> blocks, ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g,
-            ReadOnlySpan<Vector256<int>> b, ReadOnlySpan<Vector256<int>> a, int count, Span<byte> dest, int alphaThreshold)
-        {
-            BcEncoderSimd.EncodeSingleChannel(r, count, dest, 8);
-        }
     }
 
     private struct Bc5Block : IBlockEncoder
     {
         public static int BlockSize => 16;
+        public static BlockKind Kind => BlockKind.Bc5;
 
         public static void Encode(ReadOnlySpan<byte> block, Span<byte> dest, int alphaThreshold)
         {
             CompressSingleChannelBlock(block, 0, dest[..8]);
             CompressSingleChannelBlock(block, 1, dest[8..]);
         }
-
-        public static void EncodeBatch(ReadOnlySpan<byte> blocks, ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g,
-            ReadOnlySpan<Vector256<int>> b, ReadOnlySpan<Vector256<int>> a, int count, Span<byte> dest, int alphaThreshold)
-        {
-            BcEncoderSimd.EncodeSingleChannel(r, count, dest, 16);
-            BcEncoderSimd.EncodeSingleChannel(g, count, dest[8..], 16);
-        }
     }
 
-    private static unsafe void EncodeBlocks<T>(ReadOnlySpan<byte> rgba, int width, int height, byte[] output, int outputOffset, int alphaThreshold, bool parallel, bool simd)
+    private static int PreferredSimdWidth => BcEncoderSimd512.IsSupported ? 512 : BcEncoderSimd.IsSupported ? 256 : 0;
+
+    private static unsafe void EncodeBlocks<T>(ReadOnlySpan<byte> rgba, int width, int height, byte[] output, int outputOffset, int alphaThreshold, bool parallel, int simdWidth)
         where T : struct, IBlockEncoder
     {
         if (rgba.Length < width * height * 4)
@@ -210,9 +176,15 @@ public static class BcEncoder
                 ReadOnlySpan<byte> src = new ReadOnlySpan<byte>((void*)source, sourceLength);
                 Span<byte> row = output.AsSpan(outputOffset + by * blocksX * blockSize, blocksX * blockSize);
 
-                if (simd)
+                if (simdWidth == 512)
                 {
-                    EncodeRowSimd<T>(src, width, height, by, blocksX, row, alphaThreshold);
+                    BcEncoderSimd512.EncodeRow(T.Kind, src, width, height, by, blocksX, row, alphaThreshold);
+                    return;
+                }
+
+                if (simdWidth == 256)
+                {
+                    BcEncoderSimd.EncodeRow(T.Kind, src, width, height, by, blocksX, row, alphaThreshold);
                     return;
                 }
 
@@ -239,33 +211,8 @@ public static class BcEncoder
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    private static void EncodeRowSimd<T>(ReadOnlySpan<byte> src, int width, int height, int by, int blocksX, Span<byte> row, int alphaThreshold)
-        where T : struct, IBlockEncoder
-    {
-        const int Lanes = BcEncoderSimd.Lanes;
-        Span<byte> blocks = stackalloc byte[64 * Lanes];
-        Span<Vector256<int>> r = stackalloc Vector256<int>[16];
-        Span<Vector256<int>> g = stackalloc Vector256<int>[16];
-        Span<Vector256<int>> b = stackalloc Vector256<int>[16];
-        Span<Vector256<int>> a = stackalloc Vector256<int>[16];
-
-        for (int bx = 0; bx < blocksX; bx += Lanes)
-        {
-            int count = Math.Min(Lanes, blocksX - bx);
-
-            for (int lane = 0; lane < Lanes; lane++)
-            {
-                GatherBlock(src, width, height, (bx + Math.Min(lane, count - 1)) * 4, by * 4, blocks.Slice(lane * 64, 64));
-            }
-
-            BcEncoderSimd.Load(blocks, r, g, b, a);
-            T.EncodeBatch(blocks, r, g, b, a, count, row[(bx * T.BlockSize)..], alphaThreshold);
-        }
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void GatherBlock(ReadOnlySpan<byte> src, int width, int height, int x0, int y0, Span<byte> block)
+    internal static void GatherBlock(ReadOnlySpan<byte> src, int width, int height, int x0, int y0, Span<byte> block)
     {
         for (int y = 0; y < 4; y++)
         {
@@ -820,7 +767,7 @@ public static class BcEncoder
 
     #region Alpha (BC2 explicit, BC3/BC4 interpolated)
 
-    private static void CompressExplicitAlphaBlock(ReadOnlySpan<byte> block, Span<byte> dest)
+    internal static void CompressExplicitAlphaBlock(ReadOnlySpan<byte> block, Span<byte> dest)
     {
         for (int i = 0; i < 8; i++)
         {
