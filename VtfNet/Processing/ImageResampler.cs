@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 
 namespace VtfNet.Processing;
 
@@ -177,8 +179,14 @@ public static class ImageResampler
             int row0 = y * 2 * srcStride;
             int row1 = row0 + srcStride;
             int o = y * dstWidth * channels;
+            int x = channels switch
+            {
+                4 => HalveRowRgba(source.AsSpan(row0, srcStride), source.AsSpan(row1, srcStride), output.AsSpan(o, dstWidth * 4)),
+                1 => HalveRowGray(source.AsSpan(row0, srcStride), source.AsSpan(row1, srcStride), output.AsSpan(o, dstWidth)),
+                _ => 0,
+            };
 
-            for (int x = 0; x < dstWidth; x++)
+            for (o += x * channels; x < dstWidth; x++)
             {
                 int i = x * 2 * channels;
 
@@ -191,6 +199,97 @@ public static class ImageResampler
         });
 
         return output;
+    }
+
+    private static int HalveRowRgba(ReadOnlySpan<byte> row0, ReadOnlySpan<byte> row1, Span<byte> dest)
+    {
+        int pixels = dest.Length / 4;
+        ref ulong a = ref Unsafe.As<byte, ulong>(ref MemoryMarshal.GetReference(row0));
+        ref ulong b = ref Unsafe.As<byte, ulong>(ref MemoryMarshal.GetReference(row1));
+        ref uint d = ref Unsafe.As<byte, uint>(ref MemoryMarshal.GetReference(dest));
+        int x = 0;
+
+        if (Vector512.IsHardwareAccelerated)
+        {
+            for (; x + 16 <= pixels; x += 16)
+            {
+                Vector512<ulong> lo = Halve(Vector512.LoadUnsafe(ref a, (nuint)x), Vector512.LoadUnsafe(ref b, (nuint)x));
+                Vector512<ulong> hi = Halve(Vector512.LoadUnsafe(ref a, (nuint)(x + 8)), Vector512.LoadUnsafe(ref b, (nuint)(x + 8)));
+                Vector512.Narrow(lo, hi).StoreUnsafe(ref d, (nuint)x);
+            }
+        }
+
+        if (Vector256.IsHardwareAccelerated)
+        {
+            for (; x + 8 <= pixels; x += 8)
+            {
+                Vector256<ulong> lo = Halve(Vector256.LoadUnsafe(ref a, (nuint)x), Vector256.LoadUnsafe(ref b, (nuint)x));
+                Vector256<ulong> hi = Halve(Vector256.LoadUnsafe(ref a, (nuint)(x + 4)), Vector256.LoadUnsafe(ref b, (nuint)(x + 4)));
+                Vector256.Narrow(lo, hi).StoreUnsafe(ref d, (nuint)x);
+            }
+        }
+
+        return x;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector512<ulong> Halve(Vector512<ulong> a, Vector512<ulong> b)
+    {
+        Vector512<ulong> mask = Vector512.Create(0x00FF00FFul);
+        Vector512<ulong> round = Vector512.Create(0x00020002ul);
+        Vector512<ulong> rb = (a & mask) + ((a >>> 32) & mask) + (b & mask) + ((b >>> 32) & mask);
+        Vector512<ulong> ga = ((a >>> 8) & mask) + ((a >>> 40) & mask) + ((b >>> 8) & mask) + ((b >>> 40) & mask);
+        return (((rb + round) >>> 2) & mask) | ((((ga + round) >>> 2) & mask) << 8);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<ulong> Halve(Vector256<ulong> a, Vector256<ulong> b)
+    {
+        Vector256<ulong> mask = Vector256.Create(0x00FF00FFul);
+        Vector256<ulong> round = Vector256.Create(0x00020002ul);
+        Vector256<ulong> rb = (a & mask) + ((a >>> 32) & mask) + (b & mask) + ((b >>> 32) & mask);
+        Vector256<ulong> ga = ((a >>> 8) & mask) + ((a >>> 40) & mask) + ((b >>> 8) & mask) + ((b >>> 40) & mask);
+        return (((rb + round) >>> 2) & mask) | ((((ga + round) >>> 2) & mask) << 8);
+    }
+
+    private static int HalveRowGray(ReadOnlySpan<byte> row0, ReadOnlySpan<byte> row1, Span<byte> dest)
+    {
+        ref ushort a = ref Unsafe.As<byte, ushort>(ref MemoryMarshal.GetReference(row0));
+        ref ushort b = ref Unsafe.As<byte, ushort>(ref MemoryMarshal.GetReference(row1));
+        ref byte d = ref MemoryMarshal.GetReference(dest);
+        int x = 0;
+
+        if (Vector512.IsHardwareAccelerated)
+        {
+            Vector512<ushort> low = Vector512.Create((ushort)0xFF);
+            Vector512<ushort> round = Vector512.Create((ushort)2);
+
+            for (; x + 64 <= dest.Length; x += 64)
+            {
+                Vector512<ushort> a0 = Vector512.LoadUnsafe(ref a, (nuint)x), a1 = Vector512.LoadUnsafe(ref a, (nuint)(x + 32));
+                Vector512<ushort> b0 = Vector512.LoadUnsafe(ref b, (nuint)x), b1 = Vector512.LoadUnsafe(ref b, (nuint)(x + 32));
+                Vector512<ushort> s0 = ((a0 & low) + (a0 >>> 8) + (b0 & low) + (b0 >>> 8) + round) >>> 2;
+                Vector512<ushort> s1 = ((a1 & low) + (a1 >>> 8) + (b1 & low) + (b1 >>> 8) + round) >>> 2;
+                Vector512.Narrow(s0, s1).StoreUnsafe(ref d, (nuint)x);
+            }
+        }
+
+        if (Vector256.IsHardwareAccelerated)
+        {
+            Vector256<ushort> low = Vector256.Create((ushort)0xFF);
+            Vector256<ushort> round = Vector256.Create((ushort)2);
+
+            for (; x + 32 <= dest.Length; x += 32)
+            {
+                Vector256<ushort> a0 = Vector256.LoadUnsafe(ref a, (nuint)x), a1 = Vector256.LoadUnsafe(ref a, (nuint)(x + 16));
+                Vector256<ushort> b0 = Vector256.LoadUnsafe(ref b, (nuint)x), b1 = Vector256.LoadUnsafe(ref b, (nuint)(x + 16));
+                Vector256<ushort> s0 = ((a0 & low) + (a0 >>> 8) + (b0 & low) + (b0 >>> 8) + round) >>> 2;
+                Vector256<ushort> s1 = ((a1 & low) + (a1 >>> 8) + (b1 & low) + (b1 >>> 8) + round) >>> 2;
+                Vector256.Narrow(s0, s1).StoreUnsafe(ref d, (nuint)x);
+            }
+        }
+
+        return x;
     }
 
     private static byte[] HalveBoxAlphaWeighted(byte[] source, int srcWidth, int srcHeight)
@@ -206,7 +305,9 @@ public static class ImageResampler
             int row1 = row0 + srcStride;
             int o = y * dstWidth * 4;
 
-            for (int x = 0; x < dstWidth; x++, o += 4)
+            int x = HalveRowAlphaWeighted(source.AsSpan(row0, srcStride), source.AsSpan(row1, srcStride), output.AsSpan(o, dstWidth * 4));
+
+            for (o += x * 4; x < dstWidth; x++, o += 4)
             {
                 int p0 = row0 + x * 8, p1 = p0 + 4, p2 = row1 + x * 8, p3 = p2 + 4;
                 int a0 = source[p0 + 3], a1 = source[p1 + 3], a2 = source[p2 + 3], a3 = source[p3 + 3];
@@ -226,8 +327,61 @@ public static class ImageResampler
         return output;
     }
 
+    private static int HalveRowAlphaWeighted(ReadOnlySpan<byte> row0, ReadOnlySpan<byte> row1, Span<byte> dest)
+    {
+        if (!Vector512.IsHardwareAccelerated)
+        {
+            return 0;
+        }
+
+        int pixels = dest.Length / 4;
+        ref ulong a = ref Unsafe.As<byte, ulong>(ref MemoryMarshal.GetReference(row0));
+        ref ulong b = ref Unsafe.As<byte, ulong>(ref MemoryMarshal.GetReference(row1));
+        ref uint d = ref Unsafe.As<byte, uint>(ref MemoryMarshal.GetReference(dest));
+        int x = 0;
+
+        for (; x + 16 <= pixels; x += 16)
+        {
+            Vector512<ulong> lo = HalveAlphaWeighted(Vector512.LoadUnsafe(ref a, (nuint)x), Vector512.LoadUnsafe(ref b, (nuint)x));
+            Vector512<ulong> hi = HalveAlphaWeighted(Vector512.LoadUnsafe(ref a, (nuint)(x + 8)), Vector512.LoadUnsafe(ref b, (nuint)(x + 8)));
+            Vector512.Narrow(lo, hi).StoreUnsafe(ref d, (nuint)x);
+        }
+
+        return x;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector512<ulong> HalveAlphaWeighted(Vector512<ulong> a, Vector512<ulong> b)
+    {
+        Vector512<ulong> byteMask = Vector512.Create(0xFFul);
+        Vector512<ulong> a0 = (a >>> 24) & byteMask, a1 = a >>> 56, a2 = (b >>> 24) & byteMask, a3 = b >>> 56;
+        Vector512<ulong> alpha = a0 + a1 + a2 + a3;
+        Vector512<ulong> transparent = Vector512.Equals(alpha, Vector512<ulong>.Zero);
+        Vector512<double> divisor = Vector512.ConvertToDouble(alpha);
+        Vector512<ulong> half = alpha >>> 1;
+        Vector512<ulong> result = ((alpha + Vector512.Create(2ul)) >>> 2) << 24;
+
+        for (int c = 0; c < 3; c++)
+        {
+            int shift = c * 8;
+            Vector512<ulong> c0 = (a >>> shift) & byteMask, c1 = (a >>> (32 + shift)) & byteMask;
+            Vector512<ulong> c2 = (b >>> shift) & byteMask, c3 = (b >>> (32 + shift)) & byteMask;
+            Vector512<ulong> weighted = Vector512.ConvertToUInt64(Vector512.ConvertToDouble(c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3 + half) / divisor);
+            Vector512<ulong> plain = (c0 + c1 + c2 + c3 + Vector512.Create(2ul)) >>> 2;
+            result |= Vector512.ConditionalSelect(transparent, plain, weighted) << shift;
+        }
+
+        return result;
+    }
+
     private static void HorizontalPass<TIn, TOut>(TIn[] source, int sourcePixel, TOut[] dest, int destPixel, Contributions contributions, int channels)
     {
+        if (channels == 4 && Vector128.IsHardwareAccelerated)
+        {
+            HorizontalPassRgba(source, sourcePixel, dest, destPixel, contributions);
+            return;
+        }
+
         Span<float> acc = stackalloc float[4];
 
         for (int x = 0; x < contributions.Count; x++)
@@ -255,33 +409,155 @@ public static class ImageResampler
         }
     }
 
+    private static void HorizontalPassRgba<TIn, TOut>(TIn[] source, int sourcePixel, TOut[] dest, int destPixel, Contributions contributions)
+    {
+        for (int x = 0; x < contributions.Count; x++)
+        {
+            Vector128<float> acc = Vector128<float>.Zero;
+            int end = contributions.Starts[x + 1];
+
+            for (int k = contributions.Starts[x]; k < end; k++)
+            {
+                acc += ReadPixel(source, (sourcePixel + contributions.Indices[k]) * 4) * Vector128.Create(contributions.Weights[k]);
+            }
+
+            WritePixel(dest, (destPixel + x) * 4, acc);
+        }
+    }
+
     private static void VerticalPass<TIn, TOut>(TIn[] source, int width, Contributions vertical, int y, TOut[] dest, int channels)
     {
-        Span<float> acc = stackalloc float[4];
         int start = vertical.Starts[y];
         int end = vertical.Starts[y + 1];
-        int rowOffset = y * width * channels;
+        int rowLength = width * channels;
+        int rowOffset = y * rowLength;
+        int e = 0;
 
-        for (int x = 0; x < width; x++)
+        if (Vector512.IsHardwareAccelerated)
         {
-            acc.Clear();
+            for (; e + 16 <= rowLength; e += 16)
+            {
+                Vector512<float> acc = Vector512<float>.Zero;
+
+                for (int k = start; k < end; k++)
+                {
+                    acc += Read16(source, vertical.Indices[k] * rowLength + e) * Vector512.Create(vertical.Weights[k]);
+                }
+
+                Write16(dest, rowOffset + e, acc);
+            }
+        }
+
+        if (Vector256.IsHardwareAccelerated)
+        {
+            for (; e + 8 <= rowLength; e += 8)
+            {
+                Vector256<float> acc = Vector256<float>.Zero;
+
+                for (int k = start; k < end; k++)
+                {
+                    acc += Read8(source, vertical.Indices[k] * rowLength + e) * Vector256.Create(vertical.Weights[k]);
+                }
+
+                Write8(dest, rowOffset + e, acc);
+            }
+        }
+
+        for (; e < rowLength; e++)
+        {
+            float acc = 0f;
 
             for (int k = start; k < end; k++)
             {
-                int offset = (vertical.Indices[k] * width + x) * channels;
-                float w = vertical.Weights[k];
-
-                for (int c = 0; c < channels; c++)
-                {
-                    acc[c] += Read(source, offset + c) * w;
-                }
+                acc += Read(source, vertical.Indices[k] * rowLength + e) * vertical.Weights[k];
             }
 
-            for (int c = 0; c < channels; c++)
-            {
-                Write(dest, rowOffset + x * channels + c, acc[c]);
-            }
+            Write(dest, rowOffset + e, acc);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<float> ReadPixel<T>(T[] buffer, int index)
+    {
+        if (typeof(T) == typeof(byte))
+        {
+            uint packed = Unsafe.ReadUnaligned<uint>(ref Unsafe.As<T, byte>(ref buffer[index]));
+            Vector128<byte> bytes = Vector128.CreateScalar(packed).AsByte();
+            return Vector128.ConvertToSingle(Vector128.WidenLower(Vector128.WidenLower(bytes)).AsInt32());
+        }
+
+        return Vector128.LoadUnsafe(ref Unsafe.As<T, float>(ref buffer[index]));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void WritePixel<T>(T[] buffer, int index, Vector128<float> value)
+    {
+        if (typeof(T) == typeof(byte))
+        {
+            Vector128<int> rounded = Vector128.Min(Vector128.Max(Vector128.ConvertToInt32(value + Vector128.Create(0.5f)), Vector128<int>.Zero), Vector128.Create(255));
+            Vector128<byte> bytes = Vector128.Narrow(Vector128.Narrow(rounded, rounded), Vector128<short>.Zero).AsByte();
+            Unsafe.WriteUnaligned(ref Unsafe.As<T, byte>(ref buffer[index]), bytes.AsUInt32().ToScalar());
+            return;
+        }
+
+        value.StoreUnsafe(ref Unsafe.As<T, float>(ref buffer[index]));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector512<float> Read16<T>(T[] buffer, int index)
+    {
+        if (typeof(T) == typeof(byte))
+        {
+            Vector128<byte> bytes = Vector128.LoadUnsafe(ref Unsafe.As<T, byte>(ref buffer[index]));
+            (Vector128<ushort> lo, Vector128<ushort> hi) = Vector128.Widen(bytes);
+            (Vector128<uint> a, Vector128<uint> b) = Vector128.Widen(lo);
+            (Vector128<uint> c, Vector128<uint> d) = Vector128.Widen(hi);
+            return Vector512.ConvertToSingle(Vector512.Create(Vector256.Create(a, b), Vector256.Create(c, d)).AsInt32());
+        }
+
+        return Vector512.LoadUnsafe(ref Unsafe.As<T, float>(ref buffer[index]));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Write16<T>(T[] buffer, int index, Vector512<float> value)
+    {
+        if (typeof(T) == typeof(byte))
+        {
+            Vector512<int> rounded = Vector512.Min(Vector512.Max(Vector512.ConvertToInt32(value + Vector512.Create(0.5f)), Vector512<int>.Zero), Vector512.Create(255));
+            Vector512<short> shorts = Vector512.Narrow(rounded, rounded);
+            Vector512.Narrow(shorts, shorts).AsByte().GetLower().GetLower().StoreUnsafe(ref Unsafe.As<T, byte>(ref buffer[index]));
+            return;
+        }
+
+        value.StoreUnsafe(ref Unsafe.As<T, float>(ref buffer[index]));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<float> Read8<T>(T[] buffer, int index)
+    {
+        if (typeof(T) == typeof(byte))
+        {
+            ulong packed = Unsafe.ReadUnaligned<ulong>(ref Unsafe.As<T, byte>(ref buffer[index]));
+            Vector128<byte> bytes = Vector128.CreateScalar(packed).AsByte();
+            (Vector128<uint> a, Vector128<uint> b) = Vector128.Widen(Vector128.WidenLower(bytes));
+            return Vector256.ConvertToSingle(Vector256.Create(a, b).AsInt32());
+        }
+
+        return Vector256.LoadUnsafe(ref Unsafe.As<T, float>(ref buffer[index]));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Write8<T>(T[] buffer, int index, Vector256<float> value)
+    {
+        if (typeof(T) == typeof(byte))
+        {
+            Vector256<int> rounded = Vector256.Min(Vector256.Max(Vector256.ConvertToInt32(value + Vector256.Create(0.5f)), Vector256<int>.Zero), Vector256.Create(255));
+            Vector256<short> shorts = Vector256.Narrow(rounded, rounded);
+            Unsafe.WriteUnaligned(ref Unsafe.As<T, byte>(ref buffer[index]), Vector256.Narrow(shorts, shorts).AsUInt64().ToScalar());
+            return;
+        }
+
+        value.StoreUnsafe(ref Unsafe.As<T, float>(ref buffer[index]));
     }
 
     private static float Read<T>(T[] buffer, int index)

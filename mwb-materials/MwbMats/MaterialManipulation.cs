@@ -7,6 +7,10 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Diagnostics;
 
 namespace mwb_materials
@@ -120,11 +124,20 @@ namespace mwb_materials
             return (byte)Math.Min((delta * 255.0) + 1.0, 255.0);
         });
 
+        private static readonly byte[] ExponentMetalLutPinned = Pin(ExponentMetalLut);
+
         private static readonly byte[] MultiplyLut = BuildLut2((value, mask) => (byte)Math.Min(value * (mask / 255.0f), 255.0f));
 
         private static readonly byte[] Color2Lut = BuildLut(metal => (byte)0f.Lerp(255f, metal / 255.0f));
 
         private static readonly double[] RoughnessAverageLut = Enumerable.Range(0, 256).Select(gloss => Math.Max(gloss / 255.0, 0.5)).ToArray();
+
+        private static byte[] Pin(byte[] table)
+        {
+            byte[] pinned = GC.AllocateArray<byte>(table.Length + 4, pinned: true);
+            table.CopyTo(pinned, 0);
+            return pinned;
+        }
 
         private static byte[] BuildLut(Func<int, byte> function)
         {
@@ -157,29 +170,12 @@ namespace mwb_materials
 
         #region Map generation
 
-        private static void ApplyAmbientOcclusion(PixelBuffer albedo, GrayBuffer ao, float strength)
+        private static byte[] BuildAoTable(float strength)
         {
-            strength = Math.Min(Math.Max(strength, 0.0f), 1.0f);
-
-            byte[] table = BuildLut2((occlusion, color) =>
+            return BuildLut2((occlusion, color) =>
             {
                 float factor = 1.0f.Lerp(occlusion / 255.0f, strength);
                 return (byte)Math.Min(color * factor, 255.0f);
-            });
-
-            byte[] rgba = albedo.Bytes;
-            byte[] occlusionBytes = ao.Bytes;
-
-            ParallelPixels.For(albedo.PixelCount, (start, end) =>
-            {
-                for (int i = start; i < end; i++)
-                {
-                    int row = occlusionBytes[i] << 8;
-                    int o = i * 4;
-                    rgba[o] = table[row | rgba[o]];
-                    rgba[o + 1] = table[row | rgba[o + 1]];
-                    rgba[o + 2] = table[row | rgba[o + 2]];
-                }
             });
         }
 
@@ -190,50 +186,145 @@ namespace mwb_materials
                 return null;
             }
 
-            if (ambientOcclusion != null)
-            {
-                ApplyAmbientOcclusion(albedo, ambientOcclusion, props.AoAlbedoStrength);
-            }
+            float strength = Math.Min(Math.Max(props.AoAlbedoStrength, 0.0f), 1.0f);
+            byte[] rgba = albedo.Bytes;
+            byte[] ao = ambientOcclusion?.Bytes;
+            byte[] aoTable = ao != null ? BuildAoTable(strength) : null;
 
-            if (opacity != null)
+            //opacity mask -> basetexture alpha (white = opaque, black = transparent)
+            byte[] alphaSource = opacity?.Bytes ?? metalness?.Bytes;
+
+            //color2
+            byte[] alphaTable = opacity == null && metalness != null ? Color2Lut : null;
+
+            ParallelPixels.For(albedo.PixelCount, (start, end) =>
             {
-                //opacity mask -> basetexture alpha (white = opaque, black = transparent)
-                PixelKernels.WriteChannel(albedo.Bytes, (int)TextureChannel.Alpha, opacity.Bytes);
-            }
-            else if (metalness != null)
-            {
-                //color2
-                PixelKernels.WriteChannel(albedo.Bytes, (int)TextureChannel.Alpha, PixelKernels.Map(metalness.Bytes, Color2Lut));
-            }
-            else
-            {
-                PixelKernels.FillChannel(albedo.Bytes, (int)TextureChannel.Alpha, 0);
-            }
+                int i = PixelKernels.CanLookup512 ? ComposeAlbedo512(rgba, ao, strength, alphaSource, alphaTable, start, end) : start;
+
+                for (; i < end; i++)
+                {
+                    int o = i * 4;
+
+                    if (ao != null)
+                    {
+                        int row = ao[i] << 8;
+                        rgba[o] = aoTable[row | rgba[o]];
+                        rgba[o + 1] = aoTable[row | rgba[o + 1]];
+                        rgba[o + 2] = aoTable[row | rgba[o + 2]];
+                    }
+
+                    rgba[o + 3] = alphaSource == null ? (byte)0 : alphaTable == null ? alphaSource[i] : alphaTable[alphaSource[i]];
+                }
+            });
 
             return albedo;
         }
 
-        private static PixelBuffer CreateSourceNormal(PixelBuffer normal, GrayBuffer gloss, GrayBuffer ambientOcclusion, GenerateProperties props)
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static int ComposeAlbedo512(byte[] rgba, byte[] ao, float strength, byte[] alphaSource, byte[] alphaTable, int start, int end)
         {
-            if (normal == null)
-            {
-                return null;
-            }
+            PixelKernels.ByteTable table = alphaTable != null ? new PixelKernels.ByteTable(alphaTable) : default;
+            Vector512<float> keep = Vector512.Create(1.0f * (1.0f - strength));
+            Vector512<float> weight = Vector512.Create(strength);
+            Vector512<uint> rgbMask = Vector512.Create(0x00FFFFFFu);
+            Vector512<uint> low = Vector512.Create(0xFFu);
+            ref uint pixels = ref Unsafe.As<byte, uint>(ref MemoryMarshal.GetArrayDataReference(rgba));
+            Span<Vector512<uint>> alphas = stackalloc Vector512<uint>[4];
+            Span<Vector512<uint>> occlusion = stackalloc Vector512<uint>[4];
+            int i = start;
 
-            if (gloss != null)
+            for (; i + 64 <= end; i += 64)
             {
-                //phong
-                byte[] mask = PixelKernels.Map(gloss.Bytes, PhongMaskLut);
+                Vector512<byte> alpha = alphaSource == null ? Vector512<byte>.Zero : Vector512.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(alphaSource), (nuint)i);
 
-                if (props.bAoMasks && ambientOcclusion != null)
+                if (alphaTable != null)
                 {
-                    PixelKernels.Map2InPlace(mask, ambientOcclusion.Bytes, MultiplyLut);
+                    alpha = PixelKernels.Lookup(alpha, table);
                 }
 
-                PixelKernels.WriteChannel(normal.Bytes, (int)TextureChannel.Alpha, mask);
+                PixelKernels.Widen4(alpha, out alphas[0], out alphas[1], out alphas[2], out alphas[3]);
+
+                if (ao != null)
+                {
+                    PixelKernels.Widen4(Vector512.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(ao), (nuint)i), out occlusion[0], out occlusion[1], out occlusion[2], out occlusion[3]);
+                }
+
+                for (int q = 0; q < 4; q++)
+                {
+                    nuint offset = (nuint)(i + q * 16);
+                    Vector512<uint> pixel = Vector512.LoadUnsafe(ref pixels, offset);
+                    Vector512<uint> rgb = pixel & rgbMask;
+
+                    if (ao != null)
+                    {
+                        Vector512<float> factor = keep + (Vector512.ConvertToSingle(occlusion[q].AsInt32()) / Vector512.Create(255.0f)) * weight;
+                        rgb = PixelKernels.Scale(pixel & low, factor)
+                            | (PixelKernels.Scale((pixel >>> 8) & low, factor) << 8)
+                            | (PixelKernels.Scale((pixel >>> 16) & low, factor) << 16);
+                    }
+
+                    (rgb | (alphas[q] << 24)).StoreUnsafe(ref pixels, offset);
+                }
             }
 
+            return i;
+        }
+
+        private static PixelBuffer CreateSourceNormal(PixelBuffer normal, GrayBuffer gloss, GrayBuffer ambientOcclusion, GenerateProperties props)
+        {
+            if (normal == null || gloss == null)
+            {
+                return normal;
+            }
+
+            //phong
+            byte[] rgba = normal.Bytes;
+            byte[] glossBytes = gloss.Bytes;
+            byte[] ao = props.bAoMasks ? ambientOcclusion?.Bytes : null;
+
+            ParallelPixels.For(normal.PixelCount, (start, end) =>
+            {
+                int i = PixelKernels.CanLookup512 ? ComposeNormal512(rgba, glossBytes, ao, start, end) : start;
+
+                for (; i < end; i++)
+                {
+                    byte mask = PhongMaskLut[glossBytes[i]];
+                    rgba[i * 4 + 3] = ao == null ? mask : MultiplyLut[(mask << 8) | ao[i]];
+                }
+            });
+
             return normal;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static int ComposeNormal512(byte[] rgba, byte[] gloss, byte[] ao, int start, int end)
+        {
+            PixelKernels.ByteTable phong = new PixelKernels.ByteTable(PhongMaskLut);
+            Vector512<uint> rgbMask = Vector512.Create(0x00FFFFFFu);
+            ref uint pixels = ref Unsafe.As<byte, uint>(ref MemoryMarshal.GetArrayDataReference(rgba));
+            Span<Vector512<uint>> masks = stackalloc Vector512<uint>[4];
+            Span<Vector512<uint>> occlusion = stackalloc Vector512<uint>[4];
+            int i = start;
+
+            for (; i + 64 <= end; i += 64)
+            {
+                PixelKernels.Widen4(PixelKernels.Lookup(Vector512.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(gloss), (nuint)i), phong),
+                    out masks[0], out masks[1], out masks[2], out masks[3]);
+
+                if (ao != null)
+                {
+                    PixelKernels.Widen4(Vector512.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(ao), (nuint)i), out occlusion[0], out occlusion[1], out occlusion[2], out occlusion[3]);
+                }
+
+                for (int q = 0; q < 4; q++)
+                {
+                    nuint offset = (nuint)(i + q * 16);
+                    Vector512<uint> mask = ao == null ? masks[q] : PixelKernels.Multiply(masks[q], occlusion[q]);
+                    ((Vector512.LoadUnsafe(ref pixels, offset) & rgbMask) | (mask << 24)).StoreUnsafe(ref pixels, offset);
+                }
+            }
+
+            return i;
         }
 
         private static PixelBuffer CreateSourceExponent(GrayBuffer gloss, GrayBuffer metalness, GrayBuffer ambientOcclusion, GenerateProperties props)
@@ -246,43 +337,93 @@ namespace mwb_materials
             int width = gloss?.Width ?? metalness.Width;
             int height = gloss?.Height ?? metalness.Height;
             PixelBuffer sourceExponent = new PixelBuffer(width, height);
+            byte[] rgba = sourceExponent.Bytes;
+            byte[] glossBytes = gloss?.Bytes;
+            byte[] metal = metalness?.Bytes;
+            byte[] ao = props.bAoMasks ? ambientOcclusion?.Bytes : null;
 
-            if (gloss != null)
+            ParallelPixels.For(sourceExponent.PixelCount, (start, end) =>
             {
-                //phong exponent
-                byte[] exponent;
+                int i = PixelKernels.CanLookup512 && glossBytes != null ? ComposeExponent512(rgba, glossBytes, metal, ao, start, end) : start;
 
-                if (metalness != null)
+                for (; i < end; i++)
                 {
-                    exponent = (byte[])gloss.Bytes.Clone();
-                    PixelKernels.Map2InPlace(exponent, metalness.Bytes, ExponentMetalLut);
+                    int o = i * 4;
+
+                    if (glossBytes != null)
+                    {
+                        //phong exponent
+                        byte g = glossBytes[i];
+                        rgba[o] = metal != null ? ExponentMetalLut[(g << 8) | metal[i]] : ExponentLut[g];
+
+                        //rimlight
+                        rgba[o + 3] = ao == null ? g : MultiplyLut[(g << 8) | ao[i]];
+                    }
+
+                    if (metal != null)
+                    {
+                        //phong albedo tint
+                        rgba[o + 1] = metal[i];
+                    }
+                }
+            });
+
+            return sourceExponent;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static unsafe int ComposeExponent512(byte[] rgba, byte[] gloss, byte[] metal, byte[] ao, int start, int end)
+        {
+            PixelKernels.ByteTable exponent = new PixelKernels.ByteTable(ExponentLut);
+            ref uint pixels = ref Unsafe.As<byte, uint>(ref MemoryMarshal.GetArrayDataReference(rgba));
+            Span<Vector512<uint>> glossQuarters = stackalloc Vector512<uint>[4];
+            Span<Vector512<uint>> exponentQuarters = stackalloc Vector512<uint>[4];
+            Span<Vector512<uint>> metalQuarters = stackalloc Vector512<uint>[4];
+            Span<Vector512<uint>> occlusion = stackalloc Vector512<uint>[4];
+            int* metalTable = (int*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(ExponentMetalLutPinned));
+            int i = start;
+
+            for (; i + 64 <= end; i += 64)
+            {
+                Vector512<byte> g = Vector512.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(gloss), (nuint)i);
+                PixelKernels.Widen4(g, out glossQuarters[0], out glossQuarters[1], out glossQuarters[2], out glossQuarters[3]);
+
+                if (metal != null)
+                {
+                    PixelKernels.Widen4(Vector512.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(metal), (nuint)i), out metalQuarters[0], out metalQuarters[1], out metalQuarters[2], out metalQuarters[3]);
                 }
                 else
                 {
-                    exponent = PixelKernels.Map(gloss.Bytes, ExponentLut);
+                    PixelKernels.Widen4(PixelKernels.Lookup(g, exponent), out exponentQuarters[0], out exponentQuarters[1], out exponentQuarters[2], out exponentQuarters[3]);
                 }
 
-                PixelKernels.WriteChannel(sourceExponent.Bytes, (int)TextureChannel.Red, exponent);
-
-                //rimlight
-                byte[] rimlight = gloss.Bytes;
-
-                if (props.bAoMasks && ambientOcclusion != null)
+                if (ao != null)
                 {
-                    rimlight = (byte[])gloss.Bytes.Clone();
-                    PixelKernels.Map2InPlace(rimlight, ambientOcclusion.Bytes, MultiplyLut);
+                    PixelKernels.Widen4(Vector512.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(ao), (nuint)i), out occlusion[0], out occlusion[1], out occlusion[2], out occlusion[3]);
                 }
 
-                PixelKernels.WriteChannel(sourceExponent.Bytes, (int)TextureChannel.Alpha, rimlight);
+                for (int q = 0; q < 4; q++)
+                {
+                    Vector512<uint> red, green = Vector512<uint>.Zero;
+
+                    if (metal != null)
+                    {
+                        Vector512<int> index = ((glossQuarters[q] << 8) | metalQuarters[q]).AsInt32();
+                        Vector512<int> gathered = Vector512.Create(Avx2.GatherVector256(metalTable, index.GetLower(), 1), Avx2.GatherVector256(metalTable, index.GetUpper(), 1));
+                        red = gathered.AsUInt32() & Vector512.Create(0xFFu);
+                        green = metalQuarters[q];
+                    }
+                    else
+                    {
+                        red = exponentQuarters[q];
+                    }
+
+                    Vector512<uint> rim = ao == null ? glossQuarters[q] : PixelKernels.Multiply(glossQuarters[q], occlusion[q]);
+                    (red | (green << 8) | (rim << 24)).StoreUnsafe(ref pixels, (nuint)(i + q * 16));
+                }
             }
 
-            if (metalness != null)
-            {
-                //phong albedo tint
-                PixelKernels.WriteChannel(sourceExponent.Bytes, (int)TextureChannel.Green, metalness.Bytes);
-            }
-
-            return sourceExponent;
+            return i;
         }
 
         private static Color GetAverageMetallicColor(PixelBuffer albedo, GrayBuffer metalness)

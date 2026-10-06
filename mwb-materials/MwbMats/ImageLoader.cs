@@ -3,6 +3,9 @@ using StbImageSharp;
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Threading.Tasks;
 
 namespace mwb_materials.MwbMats
@@ -210,12 +213,18 @@ namespace mwb_materials.MwbMats
                 int channels = raw.Channels;
                 bool bgr = raw.Layout is Layout.Bgr or Layout.Bgra;
 
+                RowStats512 vectorStats = RowStats512.Create();
+                Vector512<byte> shuffle = PixelKernels.CanLookup512 ? ShuffleFor(raw.Layout) : default;
+
                 for (int y = chunk * rowsPerChunk; y < yEnd; y++)
                 {
                     int src = y * raw.Stride;
                     int pixel = y * width;
+                    int x = PixelKernels.CanLookup512 ? ConvertRow512(raw, shuffle, src, pixel, rgba, gray, ref vectorStats) : 0;
+                    src += x * channels;
+                    pixel += x;
 
-                    for (int x = 0; x < width; x++, src += channels, pixel++)
+                    for (; x < width; x++, src += channels, pixel++)
                     {
                         int r, g, b, a;
 
@@ -268,12 +277,12 @@ namespace mwb_materials.MwbMats
                     }
                 }
 
-                stats.GrayMin = grayMin;
-                stats.GrayMax = grayMax;
-                stats.GraySum = graySum;
-                stats.AlphaMin = alphaMin;
-                stats.AlphaMax = alphaMax;
-                stats.AlphaSum = alphaSum;
+                stats.GrayMin = Math.Min(grayMin, HorizontalMin(vectorStats.GrayMin));
+                stats.GrayMax = Math.Max(grayMax, HorizontalMax(vectorStats.GrayMax));
+                stats.GraySum = graySum + vectorStats.GraySum;
+                stats.AlphaMin = Math.Min(alphaMin, HorizontalMin(vectorStats.AlphaMin));
+                stats.AlphaMax = Math.Max(alphaMax, HorizontalMax(vectorStats.AlphaMax));
+                stats.AlphaSum = alphaSum + vectorStats.AlphaSum;
                 partials[chunk] = stats;
             });
 
@@ -285,6 +294,112 @@ namespace mwb_materials.MwbMats
             }
 
             return total;
+        }
+
+        private struct RowStats512
+        {
+            public Vector512<uint> GrayMin, GrayMax, AlphaMin, AlphaMax;
+            public long GraySum, AlphaSum;
+
+            public static RowStats512 Create()
+            {
+                return new RowStats512()
+                {
+                    GrayMin = Vector512.Create(255u),
+                    GrayMax = Vector512<uint>.Zero,
+                    AlphaMin = Vector512.Create(255u),
+                    AlphaMax = Vector512<uint>.Zero
+                };
+            }
+        }
+
+        private static int HorizontalMin(Vector512<uint> value)
+        {
+            uint min = uint.MaxValue;
+
+            for (int i = 0; i < Vector512<uint>.Count; i++)
+            {
+                min = Math.Min(min, value.GetElement(i));
+            }
+
+            return (int)min;
+        }
+
+        private static int HorizontalMax(Vector512<uint> value)
+        {
+            uint max = 0;
+
+            for (int i = 0; i < Vector512<uint>.Count; i++)
+            {
+                max = Math.Max(max, value.GetElement(i));
+            }
+
+            return (int)max;
+        }
+
+        private static Vector512<byte> ShuffleFor(Layout layout)
+        {
+            Span<byte> indices = stackalloc byte[64];
+
+            for (int p = 0; p < 16; p++)
+            {
+                for (int c = 0; c < 4; c++)
+                {
+                    indices[p * 4 + c] = layout switch
+                    {
+                        Layout.Gray => c < 3 ? (byte)p : (byte)0xFF,
+                        Layout.GrayAlpha => c < 3 ? (byte)(p * 2) : (byte)(p * 2 + 1),
+                        Layout.Rgb => c < 3 ? (byte)(p * 3 + c) : (byte)0xFF,
+                        Layout.Bgr => c < 3 ? (byte)(p * 3 + 2 - c) : (byte)0xFF,
+                        Layout.Bgra => c < 3 ? (byte)(p * 4 + 2 - c) : (byte)(p * 4 + 3),
+                        _ => (byte)(p * 4 + c)
+                    };
+                }
+            }
+
+            return Vector512.Create<byte>(indices);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static int ConvertRow512(RawImage raw, Vector512<byte> shuffle, int src, int pixel, byte[] rgba, byte[] gray, ref RowStats512 stats)
+        {
+            int channels = raw.Channels;
+            bool hasAlpha = raw.Layout is Layout.GrayAlpha or Layout.Rgba or Layout.Bgra;
+            Vector512<uint> opaque = hasAlpha ? Vector512<uint>.Zero : Vector512.Create(0xFF000000u);
+            Vector512<uint> low = Vector512.Create(0xFFu);
+            Vector512<uint> graySum = Vector512<uint>.Zero, alphaSum = Vector512<uint>.Zero;
+            ref byte data = ref MemoryMarshal.GetArrayDataReference(raw.Data);
+            int x = 0;
+
+            for (; x + 16 <= raw.Width && src + x * channels + 64 <= raw.Data.Length; x += 16)
+            {
+                Vector512<byte> bytes = Vector512.LoadUnsafe(ref data, (nuint)(src + x * channels));
+                Vector512<uint> rgbaPixels = Vector512.Shuffle(bytes, shuffle).AsUInt32() | opaque;
+                Vector512<uint> value = ((rgbaPixels & low) + ((rgbaPixels >>> 8) & low) + ((rgbaPixels >>> 16) & low)) * Vector512.Create(43691u) >>> 17;
+                Vector512<uint> alpha = rgbaPixels >>> 24;
+
+                stats.GrayMin = Vector512.Min(stats.GrayMin, value);
+                stats.GrayMax = Vector512.Max(stats.GrayMax, value);
+                stats.AlphaMin = Vector512.Min(stats.AlphaMin, alpha);
+                stats.AlphaMax = Vector512.Max(stats.AlphaMax, alpha);
+                graySum += value;
+                alphaSum += alpha;
+
+                if (rgba != null)
+                {
+                    rgbaPixels.StoreUnsafe(ref Unsafe.As<byte, uint>(ref MemoryMarshal.GetArrayDataReference(rgba)), (nuint)(pixel + x));
+                }
+
+                if (gray != null)
+                {
+                    Vector512<ushort> shorts = Vector512.Narrow(value, value);
+                    Vector512.Narrow(shorts, shorts).GetLower().GetLower().StoreUnsafe(ref MemoryMarshal.GetArrayDataReference(gray), (nuint)(pixel + x));
+                }
+            }
+
+            stats.GraySum += (long)Vector512.Sum(Vector512.WidenLower(graySum)) + (long)Vector512.Sum(Vector512.WidenUpper(graySum));
+            stats.AlphaSum += (long)Vector512.Sum(Vector512.WidenLower(alphaSum)) + (long)Vector512.Sum(Vector512.WidenUpper(alphaSum));
+            return x;
         }
 
         public static bool IsDds(string path)

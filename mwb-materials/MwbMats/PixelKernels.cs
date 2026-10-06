@@ -2,6 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 namespace mwb_materials.MwbMats
 {
@@ -96,42 +97,6 @@ namespace mwb_materials.MwbMats
             return gray;
         }
 
-        public static void WriteChannel(byte[] rgba, int channel, byte[] gray)
-        {
-            int shift = channel * 8;
-            uint keep = ~(0xFFu << shift);
-
-            ParallelPixels.For(gray.Length, (start, end) =>
-            {
-                Span<uint> pixels = MemoryMarshal.Cast<byte, uint>(rgba.AsSpan(start * 4, (end - start) * 4));
-                ReadOnlySpan<byte> values = gray.AsSpan(start, end - start);
-                int i = 0;
-
-                if (Simd)
-                {
-                    ref uint target = ref MemoryMarshal.GetReference(pixels);
-                    ref byte source = ref MemoryMarshal.GetReference(values);
-                    Vector256<uint> vkeep = Vector256.Create(keep);
-
-                    for (; i <= pixels.Length - 32; i += 32)
-                    {
-                        (Vector256<ushort> lo, Vector256<ushort> hi) = Vector256.Widen(Vector256.LoadUnsafe(ref source, (nuint)i));
-                        (Vector256<uint> a, Vector256<uint> b) = Vector256.Widen(lo);
-                        (Vector256<uint> c, Vector256<uint> d) = Vector256.Widen(hi);
-                        Blend(ref target, i, a, shift, vkeep);
-                        Blend(ref target, i + 8, b, shift, vkeep);
-                        Blend(ref target, i + 16, c, shift, vkeep);
-                        Blend(ref target, i + 24, d, shift, vkeep);
-                    }
-                }
-
-                for (; i < pixels.Length; i++)
-                {
-                    pixels[i] = (pixels[i] & keep) | ((uint)values[i] << shift);
-                }
-            });
-        }
-
         public static void FillChannel(byte[] rgba, int channel, byte value)
         {
             int shift = channel * 8;
@@ -162,30 +127,48 @@ namespace mwb_materials.MwbMats
             });
         }
 
-        public static byte[] Map(byte[] source, byte[] table)
+        public static bool CanLookup512 => Vector512.IsHardwareAccelerated && Avx512Vbmi.IsSupported;
+
+        public readonly struct ByteTable
         {
-            byte[] result = new byte[source.Length];
+            public readonly Vector512<byte> T0, T1, T2, T3;
 
-            ParallelPixels.For(source.Length, (start, end) =>
+            public ByteTable(byte[] table)
             {
-                for (int i = start; i < end; i++)
-                {
-                    result[i] = table[source[i]];
-                }
-            });
-
-            return result;
+                T0 = Vector512.Create<byte>(table.AsSpan(0, 64));
+                T1 = Vector512.Create<byte>(table.AsSpan(64, 64));
+                T2 = Vector512.Create<byte>(table.AsSpan(128, 64));
+                T3 = Vector512.Create<byte>(table.AsSpan(192, 64));
+            }
         }
 
-        public static void Map2InPlace(byte[] a, byte[] b, byte[] table)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vector512<byte> Lookup(Vector512<byte> indices, in ByteTable table)
         {
-            ParallelPixels.For(a.Length, (start, end) =>
-            {
-                for (int i = start; i < end; i++)
-                {
-                    a[i] = table[(a[i] << 8) | b[i]];
-                }
-            });
+            Vector512<byte> low = Avx512Vbmi.PermuteVar64x8x2(table.T0, indices, table.T1);
+            Vector512<byte> high = Avx512Vbmi.PermuteVar64x8x2(table.T2, indices, table.T3);
+            return Vector512.ConditionalSelect(Vector512.GreaterThan(indices, Vector512.Create((byte)127)), high, low);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Widen4(Vector512<byte> value, out Vector512<uint> q0, out Vector512<uint> q1, out Vector512<uint> q2, out Vector512<uint> q3)
+        {
+            (Vector512<ushort> low, Vector512<ushort> high) = Vector512.Widen(value);
+            (q0, q1) = Vector512.Widen(low);
+            (q2, q3) = Vector512.Widen(high);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vector512<uint> Multiply(Vector512<uint> value, Vector512<uint> mask)
+        {
+            Vector512<float> product = Vector512.ConvertToSingle(value.AsInt32()) * (Vector512.ConvertToSingle(mask.AsInt32()) / Vector512.Create(255.0f));
+            return Vector512.ConvertToInt32(Vector512.Min(product, Vector512.Create(255.0f))).AsUInt32();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vector512<uint> Scale(Vector512<uint> channel, Vector512<float> factor)
+        {
+            return Vector512.ConvertToInt32(Vector512.Min(Vector512.ConvertToSingle(channel.AsInt32()) * factor, Vector512.Create(255.0f))).AsUInt32();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -194,11 +177,5 @@ namespace mwb_materials.MwbMats
             return Vector256.Narrow(Vector256.Narrow(a, b), Vector256.Narrow(c, d));
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void Blend(ref uint target, int index, Vector256<uint> value, int shift, Vector256<uint> keep)
-        {
-            Vector256<uint> current = Vector256.LoadUnsafe(ref target, (nuint)index);
-            Vector256.StoreUnsafe((current & keep) | (value << shift), ref target, (nuint)index);
-        }
     }
 }
