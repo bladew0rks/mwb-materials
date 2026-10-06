@@ -10,12 +10,12 @@ If you need help click ![here](https://github.com/9lbw/mwb-materials/blob/main/h
 
 Debug build:
 
-```powershell
-dotnet msbuild .\mwb-materials\mwb-materials.sln /p:GenerateResourceMSBuildArchitecture=CurrentArchitecture /p:GenerateResourceMSBuildRuntime=CurrentRuntime
+```sh
+dotnet run --project mwb-materials
 ```
 
-Release build:
+Release build (`win-x64` or `linux-x64`):
 
-```powershell
-dotnet msbuild .\mwb-materials\mwb-materials.sln /p:Configuration=Release /p:GenerateResourceMSBuildArchitecture=CurrentArchitecture /p:GenerateResourceMSBuildRuntime=CurrentRuntime
+```sh
+dotnet publish mwb-materials -c Release -r linux-x64
 ```

@@ -10,32 +10,38 @@ namespace mwb_materials.MwbMats
 {
     class VmtPresetLoader
     {
-        public static List<VmtPreset> LoadPresets(string baseDirectory, Action<string> logFunc)
+        public static List<VmtPreset> LoadPresets(IEnumerable<string> baseDirectories, Action<string> logFunc)
         {
-            List<VmtPreset> presets = new List<VmtPreset>();
-            string presetsPath = Path.Combine(baseDirectory, "presets");
+            Dictionary<string, VmtPreset> byId = new Dictionary<string, VmtPreset>(StringComparer.OrdinalIgnoreCase);
 
-            if (!Directory.Exists(presetsPath))
+            foreach (string baseDirectory in baseDirectories.Where(directory => !string.IsNullOrEmpty(directory)))
             {
-                return new List<VmtPreset>() { VmtPreset.Default };
-            }
+                string presetsPath = Path.Combine(baseDirectory, "presets");
 
-            foreach (string file in Directory.GetFiles(presetsPath, "*.toml").OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-            {
-                try
+                if (!Directory.Exists(presetsPath))
                 {
-                    VmtPreset preset = LoadPreset(file, logFunc);
+                    continue;
+                }
 
-                    if (preset != null)
+                foreach (string file in Directory.GetFiles(presetsPath, "*.toml", new EnumerationOptions() { MatchCasing = MatchCasing.CaseInsensitive }).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+                {
+                    try
                     {
-                        presets.Add(preset);
+                        VmtPreset preset = LoadPreset(file, logFunc);
+
+                        if (preset != null)
+                        {
+                            byId[preset.Id] = preset;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logFunc?.Invoke("Warning: could not load VMT preset " + Path.GetFileName(file) + ": " + ex.Message);
                     }
                 }
-                catch (Exception ex)
-                {
-                    logFunc?.Invoke("Warning: could not load VMT preset " + Path.GetFileName(file) + ": " + ex.Message);
-                }
             }
+
+            List<VmtPreset> presets = byId.Values.ToList();
 
             if (!presets.Any(IsDefaultPreset))
             {

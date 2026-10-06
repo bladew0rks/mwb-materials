@@ -38,7 +38,7 @@ namespace mwb_materials.MwbMats
 
             try
             {
-                qcFiles = Directory.GetFiles(folderPath, "*.qc")
+                qcFiles = Directory.GetFiles(folderPath, "*.qc", new EnumerationOptions() { MatchCasing = MatchCasing.CaseInsensitive })
                     .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
             }

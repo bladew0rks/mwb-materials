@@ -1,16 +1,13 @@
-﻿using mwb_materials.MwbMats;
+using mwb_materials.MwbMats;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics;
 
 namespace mwb_materials
 {
@@ -47,19 +44,10 @@ namespace mwb_materials
 
         public enum TextureChannel
         {
-            Blue,
-            Green,
             Red,
+            Green,
+            Blue,
             Alpha
-        }
-
-        public enum TextureOperation
-        {
-            Replace,
-            Add,
-            Subtract,
-            Multiply,
-            Divide
         }
 
         public enum OpacityMode
@@ -69,9 +57,9 @@ namespace mwb_materials
             Translucent
         }
 
-        public struct SourceTextureSet : IDisposable
+        public sealed class SourceTextureSet
         {
-            public SourceTextureSet(Bitmap albedo, Bitmap exponent, Bitmap normal, Bitmap emissive, Color metallicColor, double averageRoughness, OpacityMode opacityMode, IntermediateTextureSet intermediates)
+            public SourceTextureSet(PixelBuffer albedo, PixelBuffer exponent, PixelBuffer normal, PixelBuffer emissive, Color metallicColor, double averageRoughness, OpacityMode opacityMode, IntermediateTextureSet intermediates)
             {
                 Albedo = albedo;
                 Exponent = exponent;
@@ -83,415 +71,316 @@ namespace mwb_materials
                 Intermediates = intermediates;
             }
 
-            public Bitmap Albedo { get; }
-            public Bitmap Exponent { get; }
-            public Bitmap Normal { get; }
-            public Bitmap Emissive { get; }
+            public PixelBuffer Albedo { get; }
+            public PixelBuffer Exponent { get; }
+            public PixelBuffer Normal { get; }
+            public PixelBuffer Emissive { get; }
             public Color AverageMetallicColor { get; }
             public double AverageRoughness { get; }
             public OpacityMode OpacityMode { get; }
             public IntermediateTextureSet Intermediates { get; }
-
-            public void Dispose()
-            {
-                Albedo?.Dispose();
-                Exponent?.Dispose();
-                Normal?.Dispose();
-                Emissive?.Dispose();
-                Intermediates?.Dispose();
-            }
         }
 
-        public sealed class IntermediateTextureSet : IDisposable
+        public sealed class IntermediateTextureSet
         {
-            public IntermediateTextureSet(Bitmap ambientOcclusion, Bitmap gloss, Bitmap metalness)
+            public IntermediateTextureSet(GrayBuffer ambientOcclusion, GrayBuffer gloss, GrayBuffer metalness)
             {
                 AmbientOcclusion = ambientOcclusion;
                 Gloss = gloss;
                 Metalness = metalness;
             }
 
-            public Bitmap AmbientOcclusion { get; }
-            public Bitmap Gloss { get; }
-            public Bitmap Metalness { get; }
-
-            public void Dispose()
-            {
-                AmbientOcclusion?.Dispose();
-                Gloss?.Dispose();
-                Metalness?.Dispose();
-            }
+            public GrayBuffer AmbientOcclusion { get; }
+            public GrayBuffer Gloss { get; }
+            public GrayBuffer Metalness { get; }
         }
 
-        private static void DumpGrayscaleInChannel(FastBitmap src, FastBitmap grayscale, TextureChannel channel, TextureOperation operation = TextureOperation.Replace)
+        public struct GenerateProperties
         {
-            if (src == null || grayscale == null)
+            public bool bAoMasks { get; set; }
+            public bool bOpenGlNormal { get; set; }
+            public bool bInvertNormalBlue { get; set; }
+            public bool bInvertOpacity { get; set; }
+            public bool bKeepIntermediates { get; set; }
+            public int ClampSize { get; set; }
+            public float AoAlbedoStrength { get; set; }
+            public Action<string> LogFunc { get; set; }
+        }
+
+        #region Lookup tables
+
+        private static readonly byte[] PhongMaskLut = BuildLut(gloss => (byte)Math.Min((Math.Pow(gloss / 255.0, 2.5) * 255.0) + 1.0, 255.0));
+
+        private static readonly double[] ExponentCurve = Enumerable.Range(0, 256).Select(gloss => Math.Pow(gloss / 255.0, 4.0)).ToArray();
+        private static readonly byte[] ExponentLut = BuildLut(gloss => (byte)Math.Min((ExponentCurve[gloss] * 255.0) + 1.0, 255.0));
+        private static readonly byte[] ExponentMetalLut = BuildLut2((gloss, metal) =>
+        {
+            double delta = ExponentCurve[gloss];
+            delta *= 1.0f.Lerp(0.5f, metal / 255.0f);
+            return (byte)Math.Min((delta * 255.0) + 1.0, 255.0);
+        });
+
+        private static readonly byte[] MultiplyLut = BuildLut2((value, mask) => (byte)Math.Min(value * (mask / 255.0f), 255.0f));
+
+        private static readonly byte[] Color2Lut = BuildLut(metal => (byte)0f.Lerp(255f, metal / 255.0f));
+
+        private static readonly double[] RoughnessAverageLut = Enumerable.Range(0, 256).Select(gloss => Math.Max(gloss / 255.0, 0.5)).ToArray();
+
+        private static byte[] BuildLut(Func<int, byte> function)
+        {
+            byte[] table = new byte[256];
+
+            for (int i = 0; i < 256; i++)
             {
-                return;
+                table[i] = function(i);
             }
 
-            for (int cursor = 0; cursor < src.Bytes.Length; cursor += 4)
+            return table;
+        }
+
+        private static byte[] BuildLut2(Func<int, int, byte> function)
+        {
+            byte[] table = new byte[256 * 256];
+
+            for (int a = 0; a < 256; a++)
             {
-                switch (operation)
+                for (int b = 0; b < 256; b++)
                 {
-                    case TextureOperation.Replace:
-                        src.Bytes[cursor + (int)channel] = (byte)grayscale.ReadGrayscale(cursor);
-                        break;
-                    case TextureOperation.Add:
-                        src.Bytes[cursor + (int)channel] = (byte)Math.Min(src.Bytes[cursor + (int)channel] + (byte)grayscale.ReadGrayscale(cursor), 255);
-                        break;
-                    case TextureOperation.Subtract:
-                        src.Bytes[cursor + (int)channel] = (byte)Math.Max(src.Bytes[cursor + (int)channel] - (byte)grayscale.ReadGrayscale(cursor), 0);
-                        break;
-                    case TextureOperation.Multiply:
-                        float mul = grayscale.ReadGrayscale(cursor) / 255.0f;
-                        float mulValue = src.Bytes[cursor + (int)channel] * mul;
-                        src.Bytes[cursor + (int)channel] = (byte)Math.Min(mulValue, 255.0f);
-                        break;
-                    case TextureOperation.Divide:
-                        float div = grayscale.ReadGrayscale(cursor) / 255.0f;
-                        float divValue = src.Bytes[cursor + (int)channel] * (1.0f - div);
-                        src.Bytes[cursor + (int)channel] = (byte)Math.Min(divValue, 255.0f);
-                        break;
+                    table[(a << 8) | b] = function(a, b);
                 }
             }
+
+            return table;
         }
 
-        private static void DumpColorInChannel(FastBitmap src, byte color, TextureChannel channel)
+        #endregion
+
+        #region Map generation
+
+        private static void ApplyAmbientOcclusion(PixelBuffer albedo, GrayBuffer ao, float strength)
         {
-            if (src == null)
-            {
-                return;
-            }
-
-            for (int cursor = 0; cursor < src.Bytes.Length; cursor += 4)
-            {
-                src.Bytes[cursor + (int)channel] = color;
-            }
-        }
-
-        private static void Invert(FastBitmap src)
-        {
-            if (src == null)
-            {
-                return;
-            }
-
-            for (int cursor = 0; cursor < src.Bytes.Length; cursor += 4)
-            {
-                src.Bytes[cursor] = (byte)(255 - src.Bytes[cursor]);
-                src.Bytes[cursor + 1] = (byte)(255 - src.Bytes[cursor + 1]);
-                src.Bytes[cursor + 2] = (byte)(255 - src.Bytes[cursor + 2]);
-                src.Bytes[cursor + 3] = (byte)(255 - src.Bytes[cursor + 3]);
-            }
-        }
-
-        private static void Invert(FastBitmap src, TextureChannel channel)
-        {
-            if (src == null)
-            {
-                return;
-            }
-
-            for (int cursor = 0; cursor < src.Bytes.Length; cursor += 4)
-            {
-                src.Bytes[cursor + (int)channel] = (byte)(255 - src.Bytes[cursor + (int)channel]);
-            }
-        }
-
-        private static void ApplyAmbientOcclusion(FastBitmap src, FastBitmap ao, float strength)
-        {
-            if (src == null || ao == null)
-            {
-                return;
-            }
-
             strength = Math.Min(Math.Max(strength, 0.0f), 1.0f);
 
-            for (int cursor = 0; cursor < src.Bytes.Length; cursor += 4)
+            byte[] table = BuildLut2((occlusion, color) =>
             {
-                float gsValue = ao.ReadGrayscale(cursor);
-                gsValue /= 255.0f;
-                gsValue = 1.0f.Lerp(gsValue, strength);
+                float factor = 1.0f.Lerp(occlusion / 255.0f, strength);
+                return (byte)Math.Min(color * factor, 255.0f);
+            });
 
-                src.Bytes[cursor] = (byte)Math.Min(src.Bytes[cursor] * gsValue, 255.0f);
-                src.Bytes[cursor + 1] = (byte)Math.Min(src.Bytes[cursor + 1] * gsValue, 255.0f);
-                src.Bytes[cursor + 2] = (byte)Math.Min(src.Bytes[cursor + 2] * gsValue, 255.0f);
-            }
+            byte[] rgba = albedo.Bytes;
+            byte[] occlusionBytes = ao.Bytes;
+
+            ParallelPixels.For(albedo.PixelCount, (start, end) =>
+            {
+                for (int i = start; i < end; i++)
+                {
+                    int row = occlusionBytes[i] << 8;
+                    int o = i * 4;
+                    rgba[o] = table[row | rgba[o]];
+                    rgba[o + 1] = table[row | rgba[o + 1]];
+                    rgba[o + 2] = table[row | rgba[o + 2]];
+                }
+            });
         }
 
-        private static FastBitmap CreateSourceAlbedo(FastBitmap albedo, FastBitmap ambientOcclusion, FastBitmap metalness, FastBitmap roughness, FastBitmap opacity, ref GenerateProperties props)
+        private static PixelBuffer CreateSourceAlbedo(PixelBuffer albedo, GrayBuffer ambientOcclusion, GrayBuffer metalness, GrayBuffer opacity, GenerateProperties props)
         {
             if (albedo == null)
             {
                 return null;
             }
 
-            FastBitmap sourceAlbedo = new FastBitmap(new Bitmap(albedo.Source.Width, albedo.Source.Height));
-            sourceAlbedo.Start(ImageLockMode.ReadWrite);
-
-            albedo.DumpInto(sourceAlbedo);
-
             if (ambientOcclusion != null)
             {
-                ApplyAmbientOcclusion(sourceAlbedo, ambientOcclusion, props.AoAlbedoStrength);
+                ApplyAmbientOcclusion(albedo, ambientOcclusion, props.AoAlbedoStrength);
             }
 
             if (opacity != null)
             {
                 //opacity mask -> basetexture alpha (white = opaque, black = transparent)
-                DumpGrayscaleInChannel(sourceAlbedo, opacity, TextureChannel.Alpha);
+                PixelKernels.WriteChannel(albedo.Bytes, (int)TextureChannel.Alpha, opacity.Bytes);
             }
             else if (metalness != null)
             {
                 //color2
-                for (int cursor = 0; cursor < sourceAlbedo.Bytes.Length; cursor += 4)
-                {
-                    float metal = metalness.ReadGrayscale(cursor);
-                    metal /= 255.0f;
-
-                    float metallic = 255f;
-                    float nonMetallic = 0f;
-
-                    float result = nonMetallic.Lerp(metallic, metal);
-                    sourceAlbedo.Bytes[cursor + (int)TextureChannel.Alpha] = (byte)result;
-                }
+                PixelKernels.WriteChannel(albedo.Bytes, (int)TextureChannel.Alpha, PixelKernels.Map(metalness.Bytes, Color2Lut));
             }
             else
             {
-                DumpColorInChannel(sourceAlbedo, 0, TextureChannel.Alpha);
+                PixelKernels.FillChannel(albedo.Bytes, (int)TextureChannel.Alpha, 0);
             }
 
-            sourceAlbedo.Stop();
-            return sourceAlbedo;
+            return albedo;
         }
 
-        private static FastBitmap CreateSourceNormal(FastBitmap normal, FastBitmap albedo, FastBitmap roughness, FastBitmap metalness, FastBitmap ambientOcclusion, ref GenerateProperties props)
+        private static PixelBuffer CreateSourceNormal(PixelBuffer normal, GrayBuffer gloss, GrayBuffer ambientOcclusion, GenerateProperties props)
         {
             if (normal == null)
             {
                 return null;
             }
 
-            FastBitmap sourceNormal = new FastBitmap(new Bitmap(normal.Source.Width, normal.Source.Height));
-            sourceNormal.Start(ImageLockMode.ReadWrite);
-
-            normal.DumpInto(sourceNormal);
-
-            if (roughness != null)
+            if (gloss != null)
             {
                 //phong
-                DumpGrayscaleInChannel(sourceNormal, roughness, TextureChannel.Alpha);
+                byte[] mask = PixelKernels.Map(gloss.Bytes, PhongMaskLut);
 
-                for (int cursor = 0; cursor < sourceNormal.Bytes.Length; cursor += 4)
+                if (props.bAoMasks && ambientOcclusion != null)
                 {
-                    double delta = sourceNormal.Bytes[cursor + (int)TextureChannel.Alpha] / 255.0;
-                    delta = Math.Pow(delta, 2.5);
-                    sourceNormal.Bytes[cursor + (int)TextureChannel.Alpha] = (byte)Math.Min((delta * 255.0) + 1.0, 255.0);
+                    PixelKernels.Map2InPlace(mask, ambientOcclusion.Bytes, MultiplyLut);
                 }
 
-                if (props.bAoMasks)
-                {
-                    DumpGrayscaleInChannel(sourceNormal, ambientOcclusion, TextureChannel.Alpha, TextureOperation.Multiply);
-                }
+                PixelKernels.WriteChannel(normal.Bytes, (int)TextureChannel.Alpha, mask);
             }
 
-            sourceNormal.Stop();
-            return sourceNormal;
+            return normal;
         }
 
-        private static FastBitmap CreateSourceExponent(FastBitmap roughness, FastBitmap metalness, FastBitmap ambientOcclusion, ref GenerateProperties props)
+        private static PixelBuffer CreateSourceExponent(GrayBuffer gloss, GrayBuffer metalness, GrayBuffer ambientOcclusion, GenerateProperties props)
         {
-            if (roughness == null && metalness == null)
+            if (gloss == null && metalness == null)
             {
                 return null;
             }
 
-            Bitmap target = (roughness != null) ? roughness.Source : metalness.Source;
+            int width = gloss?.Width ?? metalness.Width;
+            int height = gloss?.Height ?? metalness.Height;
+            PixelBuffer sourceExponent = new PixelBuffer(width, height);
 
-            FastBitmap sourceExponent = new FastBitmap(new Bitmap(target.Width, target.Height));
-            sourceExponent.Start(ImageLockMode.ReadWrite);
-
-            if (roughness != null)
+            if (gloss != null)
             {
                 //phong exponent
-                DumpGrayscaleInChannel(sourceExponent, roughness, TextureChannel.Red);
+                byte[] exponent;
 
-                for (int cursor = 0; cursor < sourceExponent.Bytes.Length; cursor += 4)
+                if (metalness != null)
                 {
-                    double delta = sourceExponent.Bytes[cursor + (int)TextureChannel.Red] / 255.0;
-                    delta = Math.Pow(delta, 4.0);
-
-                    if (metalness != null)
-                    {
-                        delta *= 1.0f.Lerp(0.5f, metalness.ReadGrayscale(cursor) / 255.0f);
-                    }
-
-                    sourceExponent.Bytes[cursor + (int)TextureChannel.Red] = (byte)Math.Min((delta * 255.0) + 1.0, 255.0);
+                    exponent = (byte[])gloss.Bytes.Clone();
+                    PixelKernels.Map2InPlace(exponent, metalness.Bytes, ExponentMetalLut);
                 }
+                else
+                {
+                    exponent = PixelKernels.Map(gloss.Bytes, ExponentLut);
+                }
+
+                PixelKernels.WriteChannel(sourceExponent.Bytes, (int)TextureChannel.Red, exponent);
 
                 //rimlight
-                DumpGrayscaleInChannel(sourceExponent, roughness, TextureChannel.Alpha);
+                byte[] rimlight = gloss.Bytes;
 
-                if (props.bAoMasks)
+                if (props.bAoMasks && ambientOcclusion != null)
                 {
-                    DumpGrayscaleInChannel(sourceExponent, ambientOcclusion, TextureChannel.Alpha, TextureOperation.Multiply);
+                    rimlight = (byte[])gloss.Bytes.Clone();
+                    PixelKernels.Map2InPlace(rimlight, ambientOcclusion.Bytes, MultiplyLut);
                 }
+
+                PixelKernels.WriteChannel(sourceExponent.Bytes, (int)TextureChannel.Alpha, rimlight);
             }
 
             if (metalness != null)
             {
                 //phong albedo tint
-                DumpGrayscaleInChannel(sourceExponent, metalness, TextureChannel.Green); 
+                PixelKernels.WriteChannel(sourceExponent.Bytes, (int)TextureChannel.Green, metalness.Bytes);
             }
 
-            sourceExponent.Stop();
             return sourceExponent;
         }
 
-        private static FastBitmap LoadImage(string file)
+        private static Color GetAverageMetallicColor(PixelBuffer albedo, GrayBuffer metalness)
         {
-            if (DdsLoader.IsPfimSupportedSource(file))
+            if (metalness == null || albedo == null)
             {
-                return new FastBitmap(DdsLoader.Load(file));
+                return Color.FromArgb(25, 25, 25);
             }
 
-            using (Image image = Image.FromFile(file))
+            byte[] color = albedo.Bytes;
+            byte[] metal = metalness.Bytes;
+
+            (double R, double G, double B)[] partials = ParallelPixels.Map(albedo.PixelCount, (start, end) =>
             {
-                return new FastBitmap(new Bitmap(image));
-            }
+                double red = 0.0, green = 0.0, blue = 0.0;
+
+                for (int i = start; i < end; i++)
+                {
+                    double value = metal[i] / 255.0;
+
+                    if (value > 0.5)
+                    {
+                        red += color[i * 4] * value;
+                        green += color[i * 4 + 1] * value;
+                        blue += color[i * 4 + 2] * value;
+                    }
+                    else
+                    {
+                        red += 25.0;
+                        green += 25.0;
+                        blue += 25.0;
+                    }
+                }
+
+                return (red, green, blue);
+            });
+
+            double count = albedo.PixelCount;
+
+            return Color.FromArgb(
+                (int)(partials.Sum(p => p.R) / count),
+                (int)(partials.Sum(p => p.G) / count),
+                (int)(partials.Sum(p => p.B) / count));
         }
 
-        public struct GenerateProperties
+        private static double GetAverageRoughness(GrayBuffer gloss)
         {
-            public bool bAoMasks { get; internal set; }
-            public bool bOpenGlNormal { get; internal set; }
-            public bool bInvertNormalBlue { get; internal set; }
-            public bool bInvertOpacity { get; internal set; }
-            public bool bKeepIntermediates { get; internal set; }
-            public int ClampSize { get; internal set; }
-            public float AoAlbedoStrength { get; internal set; }
-            public Action<string> LogFunc { get; internal set; }
+            if (gloss == null)
+            {
+                return 0.5;
+            }
+
+            byte[] bytes = gloss.Bytes;
+            double[] partials = ParallelPixels.Map(gloss.PixelCount, (start, end) =>
+            {
+                double sum = 0.0;
+
+                for (int i = start; i < end; i++)
+                {
+                    sum += RoughnessAverageLut[bytes[i]];
+                }
+
+                return sum;
+            });
+
+            return partials.Sum() / gloss.PixelCount;
         }
 
-        private struct TextureStats
-        {
-            public int Min;
-            public int Max;
-            public double Average;
+        #endregion
 
-            public override string ToString()
-            {
-                return Min.ToString(CultureInfo.InvariantCulture) + "/" +
-                    Average.ToString("0.0", CultureInfo.InvariantCulture) + "/" +
-                    Max.ToString(CultureInfo.InvariantCulture);
-            }
-        }
+        #region Source handling
 
-        private static TextureStats GetChannelStats(FastBitmap bmp, TextureChannel channel)
-        {
-            TextureStats stats = new TextureStats()
-            {
-                Min = 255,
-                Max = 0,
-                Average = 0.0
-            };
-
-            int count = 0;
-
-            for (int cursor = 0; cursor < bmp.Bytes.Length; cursor += 4)
-            {
-                int value = bmp.Bytes[cursor + (int)channel];
-                stats.Min = Math.Min(stats.Min, value);
-                stats.Max = Math.Max(stats.Max, value);
-                stats.Average += value;
-                count++;
-            }
-
-            if (count > 0)
-            {
-                stats.Average /= count;
-            }
-
-            return stats;
-        }
-
-        private static TextureStats GetGrayscaleStats(FastBitmap bmp)
-        {
-            TextureStats stats = new TextureStats()
-            {
-                Min = 255,
-                Max = 0,
-                Average = 0.0
-            };
-
-            int count = 0;
-
-            for (int cursor = 0; cursor < bmp.Bytes.Length; cursor += 4)
-            {
-                int value = bmp.ReadGrayscale(cursor);
-                stats.Min = Math.Min(stats.Min, value);
-                stats.Max = Math.Max(stats.Max, value);
-                stats.Average += value;
-                count++;
-            }
-
-            if (count > 0)
-            {
-                stats.Average /= count;
-            }
-
-            return stats;
-        }
-
-        private static void LogSourceReport(string file, string role, string channelsUsed, FastBitmap bmp, Action<string> logFunc)
-        {
-            if (logFunc == null || bmp == null)
-            {
-                return;
-            }
-
-            bmp.Start(ImageLockMode.ReadOnly);
-
-            try
-            {
-                TextureStats grayscale = GetGrayscaleStats(bmp);
-                TextureStats alpha = GetChannelStats(bmp, TextureChannel.Alpha);
-
-                logFunc("Source " + Path.GetFileName(file) +
-                    ": role=" + role +
-                    ", size=" + bmp.Source.Width + "x" + bmp.Source.Height +
-                    ", channels=" + channelsUsed +
-                    ", gray min/avg/max=" + grayscale +
-                    ", alpha min/avg/max=" + alpha);
-            }
-            finally
-            {
-                bmp.Stop();
-            }
-        }
-
-        private static void LogSourceReportFromFile(string file, string role, string channelsUsed, Action<string> logFunc)
+        private static void LogSourceReport(string file, string role, string channelsUsed, SourceStats stats, Action<string> logFunc)
         {
             if (logFunc == null)
             {
                 return;
             }
 
-            FastBitmap bmp = LoadImage(file);
-
-            try
-            {
-                LogSourceReport(file, role, channelsUsed, bmp, logFunc);
-            }
-            finally
-            {
-                bmp.Dispose();
-            }
+            logFunc("Source " + Path.GetFileName(file) +
+                ": role=" + role +
+                ", size=" + stats.Width + "x" + stats.Height +
+                ", channels=" + channelsUsed +
+                ", gray min/avg/max=" + FormatStats(stats.GrayMin, stats.GraySum, stats.GrayMax, stats.Count) +
+                ", alpha min/avg/max=" + FormatStats(stats.AlphaMin, stats.AlphaSum, stats.AlphaMax, stats.Count));
         }
 
-        private static bool TryAssignTexture(ref FastBitmap current, ref string currentSource, ref int currentPriority,
-            FastBitmap candidate, string role, string candidateSource, int candidatePriority, Action<string> logFunc)
+        private static string FormatStats(int min, long sum, int max, int count)
+        {
+            double average = count > 0 ? (double)sum / count : 0.0;
+
+            return (count > 0 ? min : 255).ToString(CultureInfo.InvariantCulture) + "/" +
+                average.ToString("0.0", CultureInfo.InvariantCulture) + "/" +
+                (count > 0 ? max : 0).ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static bool TryAssignTexture<T>(ref T current, ref string currentSource, ref int currentPriority,
+            T candidate, string role, string candidateSource, int candidatePriority, Action<string> logFunc) where T : class
         {
             if (candidate == null)
             {
@@ -509,7 +398,6 @@ namespace mwb_materials
             if (candidatePriority > currentPriority)
             {
                 logFunc?.Invoke("Precedence: " + role + " using " + candidateSource + " over " + currentSource + ".");
-                current.Dispose();
                 current = candidate;
                 currentSource = candidateSource;
                 currentPriority = candidatePriority;
@@ -517,7 +405,6 @@ namespace mwb_materials
             }
 
             logFunc?.Invoke("Precedence: " + role + " keeping " + currentSource + "; ignoring " + candidateSource + ".");
-            candidate.Dispose();
             return false;
         }
 
@@ -526,48 +413,14 @@ namespace mwb_materials
             return string.IsNullOrEmpty(source) ? "none" : source;
         }
 
-        private static Bitmap CloneFastBitmap(FastBitmap src)
+        private static GrayBuffer ExtractChannel(PixelBuffer src, TextureChannel channel)
         {
-            if (src == null)
-            {
-                return null;
-            }
-
-            FastBitmap clone = new FastBitmap(new Bitmap(src.Source.Width, src.Source.Height));
-            clone.Start(ImageLockMode.ReadWrite);
-            src.DumpInto(clone);
-            clone.Stop();
-            return clone.Source;
+            return new GrayBuffer(src.Width, src.Height, PixelKernels.ExtractChannel(src.Bytes, (int)channel));
         }
 
-        private static FastBitmap ExtractChannel(FastBitmap src, TextureChannel channel)
+        private static void SplitPackedTexture(PixelBuffer packed, string nomenclature,
+            ref GrayBuffer ao, ref GrayBuffer roughness, ref GrayBuffer metalness)
         {
-            if (src == null)
-            {
-                return null;
-            }
-
-            FastBitmap result = new FastBitmap(new Bitmap(src.Source.Width, src.Source.Height));
-            result.Start(ImageLockMode.ReadWrite);
-
-            for (int cursor = 0; cursor < src.Bytes.Length; cursor += 4)
-            {
-                byte value = src.Bytes[cursor + (int)channel];
-                result.Bytes[cursor] = value;
-                result.Bytes[cursor + 1] = value;
-                result.Bytes[cursor + 2] = value;
-                result.Bytes[cursor + 3] = 255;
-            }
-
-            result.Stop();
-            return result;
-        }
-
-        private static void SplitPackedTexture(FastBitmap packed, string nomenclature,
-            ref FastBitmap ao, ref FastBitmap roughness, ref FastBitmap metalness)
-        {
-            packed.Start(ImageLockMode.ReadOnly);
-
             if (nomenclature == PackedOrmNomenclature)
             {
                 ao = ExtractChannel(packed, TextureChannel.Red);
@@ -586,8 +439,6 @@ namespace mwb_materials
                 roughness = ExtractChannel(packed, TextureChannel.Green);
                 ao = ExtractChannel(packed, TextureChannel.Blue);
             }
-
-            packed.StopAndDispose();
         }
 
         private static bool IsCodNogTextureName(string name)
@@ -637,48 +488,47 @@ namespace mwb_materials
             return (byte)Math.Min((value * 255.0f) + 0.5f, 255.0f);
         }
 
-        private static FastBitmap CreateCodNogNormal(FastBitmap src)
+        private static PixelBuffer CreateCodNogNormal(PixelBuffer src)
         {
-            FastBitmap result = new FastBitmap(new Bitmap(src.Source.Width, src.Source.Height));
-            result.Start(ImageLockMode.ReadWrite);
+            PixelBuffer result = new PixelBuffer(src.Width, src.Height);
+            byte[] source = src.Bytes;
+            byte[] dst = result.Bytes;
 
-            for (int cursor = 0; cursor < src.Bytes.Length; cursor += 4)
+            ParallelPixels.For(src.PixelCount, (start, end) =>
             {
-                float normalX = (src.Bytes[cursor + (int)TextureChannel.Green] / 255.0f * 2.0f) - 1.0f;
-                float normalY = (src.Bytes[cursor + (int)TextureChannel.Alpha] / 255.0f * 2.0f) - 1.0f;
-
-                float x = (normalX + normalY) * 0.5f;
-                float y = (normalX - normalY) * 0.5f;
-                float z = 1.0f - Math.Abs(x) - Math.Abs(y);
-                float length = (float)Math.Sqrt((x * x) + (y * y) + (z * z));
-
-                if (length > 0.0f)
+                for (int cursor = start * 4; cursor < end * 4; cursor += 4)
                 {
-                    x /= length;
-                    y /= length;
-                    z /= length;
+                    float normalX = (source[cursor + (int)TextureChannel.Green] / 255.0f * 2.0f) - 1.0f;
+                    float normalY = (source[cursor + (int)TextureChannel.Alpha] / 255.0f * 2.0f) - 1.0f;
+
+                    float x = (normalX + normalY) * 0.5f;
+                    float y = (normalX - normalY) * 0.5f;
+                    float z = 1.0f - Math.Abs(x) - Math.Abs(y);
+                    float length = (float)Math.Sqrt((x * x) + (y * y) + (z * z));
+
+                    if (length > 0.0f)
+                    {
+                        x /= length;
+                        y /= length;
+                        z /= length;
+                    }
+
+                    dst[cursor + (int)TextureChannel.Red] = EncodeNormalComponent(x);
+                    dst[cursor + (int)TextureChannel.Green] = EncodeNormalComponent(y);
+                    dst[cursor + (int)TextureChannel.Blue] = EncodeNormalComponent(z);
+                    dst[cursor + (int)TextureChannel.Alpha] = 255;
                 }
+            });
 
-                result.Bytes[cursor] = EncodeNormalComponent(z);
-                result.Bytes[cursor + 1] = EncodeNormalComponent(y);
-                result.Bytes[cursor + 2] = EncodeNormalComponent(x);
-                result.Bytes[cursor + 3] = 255;
-            }
-
-            result.Stop();
             return result;
         }
 
-        private static void SplitCodNogTexture(FastBitmap packed,
-            ref FastBitmap ao, ref FastBitmap gloss, ref FastBitmap normal)
+        private static void SplitCodNogTexture(PixelBuffer packed,
+            ref GrayBuffer ao, ref GrayBuffer gloss, ref PixelBuffer normal)
         {
-            packed.Start(ImageLockMode.ReadOnly);
-
             gloss = ExtractChannel(packed, TextureChannel.Red);
             ao = ExtractChannel(packed, TextureChannel.Blue);
             normal = CreateCodNogNormal(packed);
-
-            packed.StopAndDispose();
         }
 
         private static string GetPackedChannelDescription(string nomenclature)
@@ -741,141 +591,139 @@ namespace mwb_materials
             return "blue(" + fileName + ")";
         }
 
-        private static void LoadRgbmTexture(string file, ref FastBitmap albedo, ref FastBitmap metalness)
+        private enum SourceRole
         {
-            Bitmap albedoBitmap;
-            Bitmap metalnessBitmap;
-
-            if (DdsLoader.IsPfimSupportedSource(file))
-            {
-                DdsLoader.LoadRgbm(file, out albedoBitmap, out metalnessBitmap);
-            }
-            else
-            {
-                using (Image image = Image.FromFile(file))
-                using (Bitmap source = new Bitmap(image))
-                {
-                    bool sourceHasAlpha = Image.IsAlphaPixelFormat(source.PixelFormat);
-                    DdsLoader.SplitRgbmBitmap(source, sourceHasAlpha, out albedoBitmap, out metalnessBitmap);
-                }
-            }
-
-            albedo = new FastBitmap(albedoBitmap);
-            metalness = new FastBitmap(metalnessBitmap);
+            None,
+            CodNog,
+            Packed,
+            Rgbm,
+            Albedo,
+            AmbientOcclusion,
+            Roughness,
+            Gloss,
+            Metalness,
+            Normal,
+            Emissive,
+            Alphatest,
+            Translucent
         }
 
-        private static void SetBiggestWidthAndHeight(ref int width, ref int height, FastBitmap bmp)
+        private static SourceRole Classify(string name)
         {
-            width = bmp.Source.Width > width ? bmp.Source.Width : width;
-            height = bmp.Source.Height > height ? bmp.Source.Height : height;
+            if (IsCodNogTextureName(name))
+            {
+                return SourceRole.CodNog;
+            }
+
+            if (name.EndsWith(PackedOrmNomenclature) || name.EndsWith(PackedRmaNomenclature) || name.EndsWith(PackedMraoNomenclature))
+            {
+                return SourceRole.Packed;
+            }
+
+            if (IsRgbmTextureName(name))
+            {
+                return SourceRole.Rgbm;
+            }
+
+            if (name.EndsWith(AlbedoNomenclature) || name.EndsWith(AlbedoAltNomenclature))
+            {
+                return SourceRole.Albedo;
+            }
+
+            if (name.EndsWith(AmbientOcclusionNomenclature) || name.EndsWith(AmbientOcclusionAltNomenclature))
+            {
+                return SourceRole.AmbientOcclusion;
+            }
+
+            if (name.EndsWith(RoughnessNomenclature))
+            {
+                return SourceRole.Roughness;
+            }
+
+            if (name.EndsWith(GlossNomenclature))
+            {
+                return SourceRole.Gloss;
+            }
+
+            if (name.EndsWith(MetalnessNomenclature) || name.EndsWith(MetalnessAltNomenclature))
+            {
+                return SourceRole.Metalness;
+            }
+
+            if (name.EndsWith(NormalNomenclature))
+            {
+                return SourceRole.Normal;
+            }
+
+            if (name.EndsWith(EmissiveNomenclature))
+            {
+                return SourceRole.Emissive;
+            }
+
+            if (name.EndsWith(AlphatestNomenclature))
+            {
+                return SourceRole.Alphatest;
+            }
+
+            if (name.EndsWith(TranslucentNomenclature))
+            {
+                return SourceRole.Translucent;
+            }
+
+            return SourceRole.None;
         }
 
-        private static void ResizeIfSmaller(FastBitmap bmp, int width, int height)
+        private static bool IsGrayRole(SourceRole role)
         {
-            if (bmp == null)
-            {
-                return;
-            }
-
-            //technically shouldn't be bigger :D :(
-            if (bmp.Source.Width >= width && bmp.Source.Height >= height)
-            {
-                return;
-            }
-
-            bmp.Resize(width, height);
+            return role == SourceRole.AmbientOcclusion || role == SourceRole.Roughness || role == SourceRole.Gloss ||
+                role == SourceRole.Metalness || role == SourceRole.Alphatest || role == SourceRole.Translucent;
         }
 
-        private static void ResizeToClampSize(int clampSize, FastBitmap[] bitmaps)
+        private sealed class LoadedSource
         {
-            foreach (FastBitmap bmp in bitmaps)
+            public string File;
+            public string Name;
+            public string FileName;
+            public SourceRole Role;
+            public PixelBuffer Rgba;
+            public GrayBuffer Gray;
+            public SourceStats Stats;
+            public bool HasAlpha;
+        }
+
+        private static void ResizeTo(PixelBuffer image, int width, int height)
+        {
+            if (image != null && (image.Width != width || image.Height != height))
             {
-                if (bmp == null)
-                {
-                    continue;
-                }
-
-                double ratioWidth = (double)clampSize / (double)bmp.Source.Width;
-                double ratioHeight = (double)clampSize / (double)bmp.Source.Height;
-                double ratio = ratioWidth < ratioHeight ? ratioWidth : ratioHeight;
-
-                if (ratio < 1.0)
-                {
-                    bmp.Resize((int)(bmp.Source.Width * ratio), (int)(bmp.Source.Height * ratio));
-                }
+                image.Resize(width, height);
             }
         }
 
-        private static Color GetAverageMetallicColor(FastBitmap albedo, FastBitmap metalness)
+        private static void ResizeTo(GrayBuffer image, int width, int height)
         {
-            if (metalness == null || albedo == null)
+            if (image != null && (image.Width != width || image.Height != height))
             {
-                return Color.FromArgb(25, 25, 25);
+                image.Resize(width, height);
             }
-
-            double red = 0.0;
-            double green = 0.0;
-            double blue = 0.0;
-
-            for (int cursor = 0; cursor < albedo.Bytes.Length; cursor += 4)
-            {
-                double metal = metalness.ReadGrayscale(cursor) / 255.0;
-
-                if (metal > 0.5)
-                {
-                    Color col = albedo.ReadColor(cursor);
-                    red += col.R * metal;
-                    green += col.G * metal;
-                    blue += col.B * metal;
-                }
-                else
-                {
-                    red += 25.0;
-                    green += 25.0;
-                    blue += 25.0;
-                }
-            }
-
-            red /= (albedo.Source.Width * albedo.Source.Height);
-            green /= (albedo.Source.Width * albedo.Source.Height);
-            blue /= (albedo.Source.Width * albedo.Source.Height);
-
-            return Color.FromArgb((int)red, (int)green, (int)blue);
         }
 
-        private static double GetAverageRoughness(FastBitmap roughness)
-        {
-            if (roughness == null)
-            {
-                return 0.5;
-            }
+        #endregion
 
-            double avgRoughness = 0.0;
-
-            for (int cursor = 0; cursor < roughness.Bytes.Length; cursor += 4)
-            {
-                avgRoughness += Math.Max(roughness.ReadGrayscale(cursor) / 255.0, 0.5);
-            }
-
-            avgRoughness /= (roughness.Source.Width * roughness.Source.Height);
-            return avgRoughness;
-        }
-
-        public static async Task<SourceTextureSet> GenerateTextures(List<string> files, GenerateProperties props)
+        public static async Task<SourceTextureSet> GenerateTextures(List<string> files, GenerateProperties props, CancellationToken cancellationToken = default)
         {
             const int PackedPriority = 10;
             const int DerivedPriority = 20;
             const int ExplicitPriority = 30;
 
-            FastBitmap albedo = null;
-            FastBitmap ambientOcclusion = null;
-            FastBitmap roughness = null;
-            FastBitmap gloss = null;
-            FastBitmap metalness = null;
-            FastBitmap normal = null;
-            FastBitmap emissive = null;
-            FastBitmap alphatestOpacity = null;
-            FastBitmap translucentOpacity = null;
+            PixelBuffer albedo = null;
+            PixelBuffer normal = null;
+            PixelBuffer emissive = null;
+            GrayBuffer ambientOcclusion = null;
+            GrayBuffer roughness = null;
+            GrayBuffer gloss = null;
+            GrayBuffer metalness = null;
+            GrayBuffer alphatestOpacity = null;
+            GrayBuffer translucentOpacity = null;
 
             string albedoSource = null;
             string ambientOcclusionSource = null;
@@ -900,136 +748,146 @@ namespace mwb_materials
             int biggestWidth = 0;
             int biggestHeight = 0;
 
-            foreach (string file in files.OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
+            void Grow(int width, int height)
             {
-                string name = Path.GetFileNameWithoutExtension(file);
-                name = name.ToLower();
-                string fileName = Path.GetFileName(file);
+                biggestWidth = Math.Max(biggestWidth, width);
+                biggestHeight = Math.Max(biggestHeight, height);
+            }
 
-                if (IsCodNogTextureName(name))
+            List<LoadedSource> sources = files
+                .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+                .Select(file =>
                 {
-                    FastBitmap packed = LoadImage(file);
-                    LogSourceReport(file, GetCodNogRole(name), "R=gloss, B=AO, G/A=normal", packed, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, packed);
-                    FastBitmap packedAo = null;
-                    FastBitmap packedGloss = null;
-                    FastBitmap packedNormal = null;
-                    SplitCodNogTexture(packed, ref packedAo, ref packedGloss, ref packedNormal);
-                    TryAssignTexture(ref ambientOcclusion, ref ambientOcclusionSource, ref ambientOcclusionPriority, packedAo, "AO", "blue(" + fileName + ")", PackedPriority, props.LogFunc);
-                    TryAssignTexture(ref gloss, ref glossSource, ref glossPriority, packedGloss, "gloss", "red(" + fileName + ")", PackedPriority, props.LogFunc);
-                    TryAssignTexture(ref normal, ref normalSource, ref normalPriority, packedNormal, "normal", fileName + " (decoded NOG)", PackedPriority, props.LogFunc);
-                    continue;
+                    string name = Path.GetFileNameWithoutExtension(file).ToLower();
+                    return new LoadedSource() { File = file, Name = name, FileName = Path.GetFileName(file), Role = Classify(name) };
+                })
+                .Where(source => source.Role != SourceRole.None)
+                .ToList();
+
+            Stopwatch stageTimer = Stopwatch.StartNew();
+
+            await Task.WhenAll(sources.Select(source => Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (IsGrayRole(source.Role))
+                {
+                    source.Gray = ImageLoader.LoadGray(source.File, out source.Stats);
                 }
-
-                if (name.EndsWith(PackedOrmNomenclature) || name.EndsWith(PackedRmaNomenclature) || name.EndsWith(PackedMraoNomenclature))
+                else
                 {
-                    string packedType = name.EndsWith(PackedOrmNomenclature) ? PackedOrmNomenclature
-                        : name.EndsWith(PackedRmaNomenclature) ? PackedRmaNomenclature
-                        : PackedMraoNomenclature;
-
-                    FastBitmap packed = LoadImage(file);
-                    LogSourceReport(file, packedType + " packed", GetPackedChannelDescription(packedType), packed, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, packed);
-                    FastBitmap packedAo = null;
-                    FastBitmap packedRoughness = null;
-                    FastBitmap packedMetalness = null;
-                    SplitPackedTexture(packed, packedType, ref packedAo, ref packedRoughness, ref packedMetalness);
-                    TryAssignTexture(ref ambientOcclusion, ref ambientOcclusionSource, ref ambientOcclusionPriority, packedAo, "AO", GetPackedSourceDescription(packedType, "ao", fileName), PackedPriority, props.LogFunc);
-                    TryAssignTexture(ref roughness, ref roughnessSource, ref roughnessPriority, packedRoughness, "roughness", GetPackedSourceDescription(packedType, "roughness", fileName), PackedPriority, props.LogFunc);
-                    TryAssignTexture(ref metalness, ref metalnessSource, ref metalnessPriority, packedMetalness, "metalness", GetPackedSourceDescription(packedType, "metalness", fileName), PackedPriority, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, ambientOcclusion);
-                    continue;
+                    source.Rgba = ImageLoader.LoadRgba(source.File, out source.HasAlpha, out source.Stats);
                 }
+            }, cancellationToken)));
 
-                if (IsRgbmTextureName(name))
-                {
-                    string rgbmRole = name.EndsWith(AlbedoMetalnessNomenclature) ? AlbedoMetalnessNomenclature : CodAlbedoSpecNomenclature;
-                    LogSourceReportFromFile(file, rgbmRole, "RGB=albedo, A=metalness", props.LogFunc);
-                    FastBitmap rgbmAlbedo = null;
-                    FastBitmap rgbmMetalness = null;
-                    LoadRgbmTexture(file, ref rgbmAlbedo, ref rgbmMetalness);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, rgbmAlbedo);
-                    TryAssignTexture(ref albedo, ref albedoSource, ref albedoPriority, rgbmAlbedo, "albedo", "rgb(" + fileName + ")", DerivedPriority, props.LogFunc);
-                    TryAssignTexture(ref metalness, ref metalnessSource, ref metalnessPriority, rgbmMetalness, "metalness", "alpha(" + fileName + ")", DerivedPriority, props.LogFunc);
-                    continue;
-                }
+            long decodeMs = stageTimer.ElapsedMilliseconds;
+            stageTimer.Restart();
 
-                if (name.EndsWith(AlbedoNomenclature) || name.EndsWith(AlbedoAltNomenclature))
-                {
-                    FastBitmap candidate = LoadImage(file);
-                    LogSourceReport(file, name.EndsWith(AlbedoNomenclature) ? AlbedoNomenclature : AlbedoAltNomenclature, "RGB=albedo", candidate, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, candidate);
-                    TryAssignTexture(ref albedo, ref albedoSource, ref albedoPriority, candidate, "albedo", fileName, ExplicitPriority, props.LogFunc);
-                    continue;
-                }
+            foreach (LoadedSource source in sources)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
 
-                if (name.EndsWith(AmbientOcclusionNomenclature) || name.EndsWith(AmbientOcclusionAltNomenclature))
-                {
-                    FastBitmap candidate = LoadImage(file);
-                    LogSourceReport(file, name.EndsWith(AmbientOcclusionNomenclature) ? AmbientOcclusionNomenclature : AmbientOcclusionAltNomenclature, "grayscale/RGB=AO", candidate, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, candidate);
-                    TryAssignTexture(ref ambientOcclusion, ref ambientOcclusionSource, ref ambientOcclusionPriority, candidate, "AO", fileName, ExplicitPriority, props.LogFunc);
-                    continue;
-                }
+                string name = source.Name;
+                string file = source.File;
+                string fileName = source.FileName;
+                PixelBuffer rgba = source.Rgba;
+                GrayBuffer gray = source.Gray;
+                source.Rgba = null;
+                source.Gray = null;
 
-                if (name.EndsWith(RoughnessNomenclature))
+                switch (source.Role)
                 {
-                    FastBitmap candidate = LoadImage(file);
-                    LogSourceReport(file, RoughnessNomenclature, "grayscale/RGB=roughness, inverted to gloss", candidate, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, candidate);
-                    TryAssignTexture(ref roughness, ref roughnessSource, ref roughnessPriority, candidate, "roughness", fileName, ExplicitPriority, props.LogFunc);
-                    continue;
-                }
+                    case SourceRole.CodNog:
+                    {
+                        LogSourceReport(file, GetCodNogRole(name), "R=gloss, B=AO, G/A=normal", source.Stats, props.LogFunc);
+                        Grow(rgba.Width, rgba.Height);
+                        GrayBuffer packedAo = null;
+                        GrayBuffer packedGloss = null;
+                        PixelBuffer packedNormal = null;
+                        SplitCodNogTexture(rgba, ref packedAo, ref packedGloss, ref packedNormal);
+                        TryAssignTexture(ref ambientOcclusion, ref ambientOcclusionSource, ref ambientOcclusionPriority, packedAo, "AO", "blue(" + fileName + ")", PackedPriority, props.LogFunc);
+                        TryAssignTexture(ref gloss, ref glossSource, ref glossPriority, packedGloss, "gloss", "red(" + fileName + ")", PackedPriority, props.LogFunc);
+                        TryAssignTexture(ref normal, ref normalSource, ref normalPriority, packedNormal, "normal", fileName + " (decoded NOG)", PackedPriority, props.LogFunc);
+                        break;
+                    }
+                    case SourceRole.Packed:
+                    {
+                        string packedType = name.EndsWith(PackedOrmNomenclature) ? PackedOrmNomenclature
+                            : name.EndsWith(PackedRmaNomenclature) ? PackedRmaNomenclature
+                            : PackedMraoNomenclature;
 
-                if (name.EndsWith(GlossNomenclature))
-                {
-                    FastBitmap candidate = LoadImage(file);
-                    LogSourceReport(file, GlossNomenclature, "grayscale/RGB=gloss", candidate, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, candidate);
-                    TryAssignTexture(ref gloss, ref glossSource, ref glossPriority, candidate, "gloss", fileName, ExplicitPriority, props.LogFunc);
-                    continue;
-                }
+                        LogSourceReport(file, packedType + " packed", GetPackedChannelDescription(packedType), source.Stats, props.LogFunc);
+                        Grow(rgba.Width, rgba.Height);
+                        GrayBuffer packedAo = null;
+                        GrayBuffer packedRoughness = null;
+                        GrayBuffer packedMetalness = null;
+                        SplitPackedTexture(rgba, packedType, ref packedAo, ref packedRoughness, ref packedMetalness);
+                        TryAssignTexture(ref ambientOcclusion, ref ambientOcclusionSource, ref ambientOcclusionPriority, packedAo, "AO", GetPackedSourceDescription(packedType, "ao", fileName), PackedPriority, props.LogFunc);
+                        TryAssignTexture(ref roughness, ref roughnessSource, ref roughnessPriority, packedRoughness, "roughness", GetPackedSourceDescription(packedType, "roughness", fileName), PackedPriority, props.LogFunc);
+                        TryAssignTexture(ref metalness, ref metalnessSource, ref metalnessPriority, packedMetalness, "metalness", GetPackedSourceDescription(packedType, "metalness", fileName), PackedPriority, props.LogFunc);
 
-                if (name.EndsWith(MetalnessNomenclature) || name.EndsWith(MetalnessAltNomenclature))
-                {
-                    FastBitmap candidate = LoadImage(file);
-                    LogSourceReport(file, name.EndsWith(MetalnessNomenclature) ? MetalnessNomenclature : MetalnessAltNomenclature, "grayscale/RGB=metalness", candidate, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, candidate);
-                    TryAssignTexture(ref metalness, ref metalnessSource, ref metalnessPriority, candidate, "metalness", fileName, ExplicitPriority, props.LogFunc);
-                    continue;
-                }
+                        if (ambientOcclusion != null)
+                        {
+                            Grow(ambientOcclusion.Width, ambientOcclusion.Height);
+                        }
 
-                if (name.EndsWith(NormalNomenclature))
-                {
-                    FastBitmap candidate = LoadImage(file);
-                    LogSourceReport(file, NormalNomenclature, "RGB=normal", candidate, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, candidate);
-                    TryAssignTexture(ref normal, ref normalSource, ref normalPriority, candidate, "normal", fileName, ExplicitPriority, props.LogFunc);
-                    continue;
-                }
-
-                if (name.EndsWith(EmissiveNomenclature))
-                {
-                    FastBitmap candidate = LoadImage(file);
-                    LogSourceReport(file, EmissiveNomenclature, "RGB=emissive", candidate, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, candidate);
-                    TryAssignTexture(ref emissive, ref emissiveSource, ref emissivePriority, candidate, "emissive", fileName, ExplicitPriority, props.LogFunc);
-                }
-
-                if (name.EndsWith(AlphatestNomenclature))
-                {
-                    FastBitmap candidate = LoadImage(file);
-                    LogSourceReport(file, AlphatestNomenclature, "grayscale/RGB=alphatest opacity", candidate, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, candidate);
-                    TryAssignTexture(ref alphatestOpacity, ref alphatestOpacitySource, ref alphatestOpacityPriority, candidate, "alphatest opacity", fileName, ExplicitPriority, props.LogFunc);
-                }
-
-                if (name.EndsWith(TranslucentNomenclature))
-                {
-                    FastBitmap candidate = LoadImage(file);
-                    LogSourceReport(file, TranslucentNomenclature, "grayscale/RGB=translucent opacity", candidate, props.LogFunc);
-                    SetBiggestWidthAndHeight(ref biggestWidth, ref biggestHeight, candidate);
-                    TryAssignTexture(ref translucentOpacity, ref translucentOpacitySource, ref translucentOpacityPriority, candidate, "translucent opacity", fileName, ExplicitPriority, props.LogFunc);
+                        break;
+                    }
+                    case SourceRole.Rgbm:
+                    {
+                        string rgbmRole = name.EndsWith(AlbedoMetalnessNomenclature) ? AlbedoMetalnessNomenclature : CodAlbedoSpecNomenclature;
+                        LogSourceReport(file, rgbmRole, "RGB=albedo, A=metalness", source.Stats, props.LogFunc);
+                        ImageLoader.SplitRgbm(rgba, source.HasAlpha, out PixelBuffer rgbmAlbedo, out GrayBuffer rgbmMetalness);
+                        Grow(rgbmAlbedo.Width, rgbmAlbedo.Height);
+                        TryAssignTexture(ref albedo, ref albedoSource, ref albedoPriority, rgbmAlbedo, "albedo", "rgb(" + fileName + ")", DerivedPriority, props.LogFunc);
+                        TryAssignTexture(ref metalness, ref metalnessSource, ref metalnessPriority, rgbmMetalness, "metalness", "alpha(" + fileName + ")", DerivedPriority, props.LogFunc);
+                        break;
+                    }
+                    case SourceRole.Albedo:
+                        LogSourceReport(file, name.EndsWith(AlbedoNomenclature) ? AlbedoNomenclature : AlbedoAltNomenclature, "RGB=albedo", source.Stats, props.LogFunc);
+                        Grow(rgba.Width, rgba.Height);
+                        TryAssignTexture(ref albedo, ref albedoSource, ref albedoPriority, rgba, "albedo", fileName, ExplicitPriority, props.LogFunc);
+                        break;
+                    case SourceRole.AmbientOcclusion:
+                        LogSourceReport(file, name.EndsWith(AmbientOcclusionNomenclature) ? AmbientOcclusionNomenclature : AmbientOcclusionAltNomenclature, "grayscale/RGB=AO", source.Stats, props.LogFunc);
+                        Grow(gray.Width, gray.Height);
+                        TryAssignTexture(ref ambientOcclusion, ref ambientOcclusionSource, ref ambientOcclusionPriority, gray, "AO", fileName, ExplicitPriority, props.LogFunc);
+                        break;
+                    case SourceRole.Roughness:
+                        LogSourceReport(file, RoughnessNomenclature, "grayscale/RGB=roughness, inverted to gloss", source.Stats, props.LogFunc);
+                        Grow(gray.Width, gray.Height);
+                        TryAssignTexture(ref roughness, ref roughnessSource, ref roughnessPriority, gray, "roughness", fileName, ExplicitPriority, props.LogFunc);
+                        break;
+                    case SourceRole.Gloss:
+                        LogSourceReport(file, GlossNomenclature, "grayscale/RGB=gloss", source.Stats, props.LogFunc);
+                        Grow(gray.Width, gray.Height);
+                        TryAssignTexture(ref gloss, ref glossSource, ref glossPriority, gray, "gloss", fileName, ExplicitPriority, props.LogFunc);
+                        break;
+                    case SourceRole.Metalness:
+                        LogSourceReport(file, name.EndsWith(MetalnessNomenclature) ? MetalnessNomenclature : MetalnessAltNomenclature, "grayscale/RGB=metalness", source.Stats, props.LogFunc);
+                        Grow(gray.Width, gray.Height);
+                        TryAssignTexture(ref metalness, ref metalnessSource, ref metalnessPriority, gray, "metalness", fileName, ExplicitPriority, props.LogFunc);
+                        break;
+                    case SourceRole.Normal:
+                        LogSourceReport(file, NormalNomenclature, "RGB=normal", source.Stats, props.LogFunc);
+                        Grow(rgba.Width, rgba.Height);
+                        TryAssignTexture(ref normal, ref normalSource, ref normalPriority, rgba, "normal", fileName, ExplicitPriority, props.LogFunc);
+                        break;
+                    case SourceRole.Emissive:
+                        LogSourceReport(file, EmissiveNomenclature, "RGB=emissive", source.Stats, props.LogFunc);
+                        Grow(rgba.Width, rgba.Height);
+                        TryAssignTexture(ref emissive, ref emissiveSource, ref emissivePriority, rgba, "emissive", fileName, ExplicitPriority, props.LogFunc);
+                        break;
+                    case SourceRole.Alphatest:
+                        LogSourceReport(file, AlphatestNomenclature, "grayscale/RGB=alphatest opacity", source.Stats, props.LogFunc);
+                        Grow(gray.Width, gray.Height);
+                        TryAssignTexture(ref alphatestOpacity, ref alphatestOpacitySource, ref alphatestOpacityPriority, gray, "alphatest opacity", fileName, ExplicitPriority, props.LogFunc);
+                        break;
+                    case SourceRole.Translucent:
+                        LogSourceReport(file, TranslucentNomenclature, "grayscale/RGB=translucent opacity", source.Stats, props.LogFunc);
+                        Grow(gray.Width, gray.Height);
+                        TryAssignTexture(ref translucentOpacity, ref translucentOpacitySource, ref translucentOpacityPriority, gray, "translucent opacity", fileName, ExplicitPriority, props.LogFunc);
+                        break;
                 }
             }
 
@@ -1039,7 +897,7 @@ namespace mwb_materials
             }
 
             //resolve opacity mode (prefer alphatest if both are present)
-            FastBitmap opacity = null;
+            GrayBuffer opacity = null;
             OpacityMode opacityMode = OpacityMode.None;
 
             if (alphatestOpacity != null)
@@ -1050,7 +908,6 @@ namespace mwb_materials
                 if (translucentOpacity != null)
                 {
                     props.LogFunc?.Invoke("Precedence: opacity using alphatest " + alphatestOpacitySource + "; ignoring translucent " + translucentOpacitySource + ".");
-                    translucentOpacity.Dispose();
                 }
             }
             else if (translucentOpacity != null)
@@ -1074,124 +931,72 @@ namespace mwb_materials
                 ", opacity: " + DescribeTextureSource(opacitySummary) +
                 ", emissive: " + DescribeTextureSource(emissiveSource));
 
-            //resize textures
-            biggestWidth = Math.Min(props.ClampSize, biggestWidth);
-            biggestHeight = Math.Min(props.ClampSize, biggestHeight);
+            long sortMs = stageTimer.ElapsedMilliseconds;
+            stageTimer.Restart();
 
-            ResizeIfSmaller(albedo, biggestWidth, biggestHeight);
-            ResizeIfSmaller(ambientOcclusion, biggestWidth, biggestHeight);
-            ResizeIfSmaller(roughness, biggestWidth, biggestHeight);
-            ResizeIfSmaller(gloss, biggestWidth, biggestHeight);
-            ResizeIfSmaller(metalness, biggestWidth, biggestHeight);
-            ResizeIfSmaller(normal, biggestWidth, biggestHeight);
-            ResizeIfSmaller(emissive, biggestWidth, biggestHeight);
-            ResizeIfSmaller(opacity, biggestWidth, biggestHeight);
+            int targetWidth = Math.Max(biggestWidth, 1);
+            int targetHeight = Math.Max(biggestHeight, 1);
+            double ratio = Math.Min((double)props.ClampSize / targetWidth, (double)props.ClampSize / targetHeight);
 
-            ResizeToClampSize(props.ClampSize, new FastBitmap[] { albedo, ambientOcclusion, roughness, gloss, metalness, normal, emissive, opacity });
-
-            //invert roughness
-            Task roughnessTask = Task.Run(() =>
+            if (ratio < 1.0)
             {
-                roughness?.Start(ImageLockMode.ReadWrite);
-                Invert(roughness);
-                roughness?.Stop();
-            });
-
-            Task normalOpenGlTask = Task.CompletedTask;
-
-            if (props.bOpenGlNormal || props.bInvertNormalBlue)
-            {
-                normalOpenGlTask = Task.Run(() =>
-                {
-                    normal?.Start(ImageLockMode.ReadWrite);
-
-                    if (props.bOpenGlNormal)
-                    {
-                        Invert(normal, TextureChannel.Green);
-                    }
-
-                    if (props.bInvertNormalBlue)
-                    {
-                        Invert(normal, TextureChannel.Blue);
-                    }
-
-                    normal?.Stop();
-                });  
+                targetWidth = Math.Max(1, (int)(targetWidth * ratio));
+                targetHeight = Math.Max(1, (int)(targetHeight * ratio));
             }
 
-            Task opacityInvertTask = Task.CompletedTask;
+            ResizeTo(albedo, targetWidth, targetHeight);
+            ResizeTo(normal, targetWidth, targetHeight);
+            ResizeTo(emissive, targetWidth, targetHeight);
 
-            if (props.bInvertOpacity)
+            foreach (GrayBuffer mask in new[] { ambientOcclusion, roughness, gloss, metalness, opacity })
             {
-                opacityInvertTask = Task.Run(() =>
-                {
-                    opacity?.Start(ImageLockMode.ReadWrite);
-                    Invert(opacity);
-                    opacity?.Stop();
-                });
+                cancellationToken.ThrowIfCancellationRequested();
+                ResizeTo(mask, targetWidth, targetHeight);
             }
 
-            await normalOpenGlTask; await roughnessTask; await opacityInvertTask;
-
-            //start edits
-            albedo?.Start(ImageLockMode.ReadOnly);
-            ambientOcclusion?.Start(ImageLockMode.ReadOnly);
-            roughness?.Start(ImageLockMode.ReadOnly);
-            gloss?.Start(ImageLockMode.ReadOnly);
-            metalness?.Start(ImageLockMode.ReadOnly);
-            normal?.Start(ImageLockMode.ReadOnly);
-            opacity?.Start(ImageLockMode.ReadOnly);
-
-            Task<FastBitmap> albedoTask = Task.Run(() =>
+            if (roughness != null)
             {
-                return CreateSourceAlbedo(albedo, ambientOcclusion, metalness, (gloss != null) ? gloss : roughness, opacity, ref props);
-            });
+                PixelKernels.Invert(roughness.Bytes);
+            }
 
-            Task<FastBitmap> normalTask = Task.Run(() =>
+            if (normal != null && props.bOpenGlNormal)
             {
-                return CreateSourceNormal(normal, albedo, (gloss != null) ? gloss : roughness, metalness, ambientOcclusion, ref props);
-            });
+                PixelKernels.InvertChannel(normal.Bytes, (int)TextureChannel.Green);
+            }
 
-            Task<FastBitmap> exponentTask = Task.Run(() =>
+            if (normal != null && props.bInvertNormalBlue)
             {
-                return CreateSourceExponent((gloss != null) ? gloss : roughness, metalness, ambientOcclusion, ref props);
-            });
+                PixelKernels.InvertChannel(normal.Bytes, (int)TextureChannel.Blue);
+            }
 
-            Task<Color> getMetallicColor = Task.Run(() =>
+            if (opacity != null && props.bInvertOpacity)
             {
-                return GetAverageMetallicColor(albedo, metalness);
-            });
+                PixelKernels.Invert(opacity.Bytes);
+            }
 
-            Task<double> getAverageRoughness = Task.Run(() =>
-            {
-                return GetAverageRoughness((gloss != null) ? gloss : roughness);
-            });
+            cancellationToken.ThrowIfCancellationRequested();
 
-            FastBitmap sourceAlbedo = await albedoTask;
-            FastBitmap sourceNormal = await normalTask;
-            FastBitmap sourceExponent = await exponentTask;
-            Color averageMetallicColor = await getMetallicColor;
-            double averageRoughness = await getAverageRoughness;
+            GrayBuffer glossOrRoughness = gloss ?? roughness;
+
+            Color averageMetallicColor = GetAverageMetallicColor(albedo, metalness);
+            double averageRoughness = GetAverageRoughness(glossOrRoughness);
+
+            Task<PixelBuffer> albedoTask = Task.Run(() => CreateSourceAlbedo(albedo, ambientOcclusion, metalness, opacity, props));
+            Task<PixelBuffer> normalTask = Task.Run(() => CreateSourceNormal(normal, glossOrRoughness, ambientOcclusion, props));
+            Task<PixelBuffer> exponentTask = Task.Run(() => CreateSourceExponent(glossOrRoughness, metalness, ambientOcclusion, props));
+
+            await Task.WhenAll(albedoTask, normalTask, exponentTask);
+            props.LogFunc?.Invoke("Timing: decode " + decodeMs + " ms, split " + sortMs + " ms, process " + stageTimer.ElapsedMilliseconds + " ms");
+
             IntermediateTextureSet intermediates = null;
 
             if (props.bKeepIntermediates)
             {
-                intermediates = new IntermediateTextureSet(
-                    CloneFastBitmap(ambientOcclusion),
-                    CloneFastBitmap((gloss != null) ? gloss : roughness),
-                    CloneFastBitmap(metalness));
+                intermediates = new IntermediateTextureSet(ambientOcclusion, glossOrRoughness, metalness);
             }
 
-            //stop edits
-            albedo?.StopAndDispose();
-            ambientOcclusion?.StopAndDispose();
-            roughness?.StopAndDispose();
-            gloss?.StopAndDispose();
-            metalness?.StopAndDispose();
-            normal?.StopAndDispose();
-            opacity?.StopAndDispose();
-
-            return new SourceTextureSet(sourceAlbedo?.Source, sourceExponent?.Source, sourceNormal?.Source, emissive?.Source, averageMetallicColor, averageRoughness, opacityMode, intermediates);
+            return new SourceTextureSet(albedoTask.Result, exponentTask.Result, normalTask.Result, emissive,
+                averageMetallicColor, averageRoughness, opacityMode, intermediates);
         }
     }
 }

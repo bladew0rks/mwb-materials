@@ -8,42 +8,47 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: windows-latest
+            rid: win-x64
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup NuGet
-        uses: NuGet/setup-nuget@v2
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+      - name: Publish
+        run: dotnet publish mwb-materials/mwb-materials.csproj -c Release -r ${{ matrix.rid }} -o publish/${{ matrix.rid }}
 
-      - name: Restore packages
-        run: nuget restore .\mwb-materials\mwb-materials.sln
-
-      - name: Build Release
-        run: >
-          msbuild .\mwb-materials\mwb-materials.sln
-          /m
-          /p:Configuration=Release
-          /p:GenerateResourceMSBuildArchitecture=CurrentArchitecture
-          /p:GenerateResourceMSBuildRuntime=CurrentRuntime
-
-      - name: Upload Release artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mwb-materials-release
-          path: .\mwb-materials\bin\Release\
+          name: mwb-materials-${{ matrix.rid }}
+          path: publish/${{ matrix.rid }}/
 
-      - name: Package Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Package (Linux)
+        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Linux'
+        run: tar -czf mwb-materials-${{ matrix.rid }}.tar.gz -C publish/${{ matrix.rid }} .
+
+      - name: Package (Windows)
+        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path .\mwb-materials\bin\Release\* -DestinationPath .\mwb-materials-release.zip -Force
+        run: Compress-Archive -Path publish/${{ matrix.rid }}/* -DestinationPath mwb-materials-${{ matrix.rid }}.zip -Force
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: .\mwb-materials-release.zip
+          files: |
+            mwb-materials-*.tar.gz
+            mwb-materials-*.zip

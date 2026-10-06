@@ -1,11 +1,10 @@
 using SharpGLTF.Schema2;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Web.Script.Serialization;
+using System.Text.Json;
 
 namespace mwb_materials.MwbMats
 {
@@ -306,12 +305,38 @@ namespace mwb_materials.MwbMats
                 ? ReadGlbJson(gltfFile)
                 : File.ReadAllText(gltfFile, Encoding.UTF8);
 
-            JavaScriptSerializer serializer = new JavaScriptSerializer()
+            using (JsonDocument document = JsonDocument.Parse(json, new JsonDocumentOptions() { MaxDepth = 256, AllowTrailingCommas = true }))
             {
-                MaxJsonLength = int.MaxValue,
-                RecursionLimit = 256
-            };
-            return serializer.Deserialize<Dictionary<string, object>>(json);
+                return ToObject(document.RootElement) as Dictionary<string, object> ?? new Dictionary<string, object>();
+            }
+        }
+
+        private static object ToObject(JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    Dictionary<string, object> result = new Dictionary<string, object>();
+
+                    foreach (JsonProperty property in element.EnumerateObject())
+                    {
+                        result[property.Name] = ToObject(property.Value);
+                    }
+
+                    return result;
+                case JsonValueKind.Array:
+                    return element.EnumerateArray().Select(ToObject).ToArray();
+                case JsonValueKind.String:
+                    return element.GetString();
+                case JsonValueKind.Number:
+                    return element.TryGetInt64(out long integer) ? (object)integer : element.GetDouble();
+                case JsonValueKind.True:
+                    return true;
+                case JsonValueKind.False:
+                    return false;
+                default:
+                    return null;
+            }
         }
 
         private static string ReadGlbJson(string glbFile)
@@ -505,19 +530,7 @@ namespace mwb_materials.MwbMats
 
         private static bool IsPotentialTextureFile(string file)
         {
-            if (DdsLoader.IsPfimSupportedSource(file))
-            {
-                return true;
-            }
-
-            string extension = Path.GetExtension(file);
-
-            return string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(extension, ".bmp", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(extension, ".tif", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(extension, ".tiff", StringComparison.OrdinalIgnoreCase);
+            return ImageLoader.HasSupportedExtension(file);
         }
 
         private static bool IsGeneratedFolderPath(string file)
@@ -549,21 +562,7 @@ namespace mwb_materials.MwbMats
             }
 
             object value = obj[key];
-            object[] array = value as object[];
-
-            if (array != null)
-            {
-                return array;
-            }
-
-            ArrayList list = value as ArrayList;
-
-            if (list != null)
-            {
-                return list.Cast<object>().ToArray();
-            }
-
-            return null;
+            return value as object[];
         }
 
         private static string GetString(Dictionary<string, object> obj, string key)

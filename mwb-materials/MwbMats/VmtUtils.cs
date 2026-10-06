@@ -1,9 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
+using System;
 using System.Drawing;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace mwb_materials.MwbMats
 {
@@ -11,11 +8,11 @@ namespace mwb_materials.MwbMats
     {
         private static readonly EnvMapFile[] EnvMaps = new EnvMapFile[]
         {
-            new EnvMapFile{ Name = "specularity_00", Content = Properties.Resources.specularity_00, Roughness = 0.5 },
-            new EnvMapFile{ Name = "specularity_25", Content = Properties.Resources.specularity_25, Roughness = 0.7 },
-            new EnvMapFile{ Name = "specularity_50", Content = Properties.Resources.specularity_50, Roughness = 0.8 },
-            new EnvMapFile{ Name = "specularity_75", Content = Properties.Resources.specularity_75, Roughness = 0.85 },
-            new EnvMapFile{ Name = "specularity_100", Content = Properties.Resources.specularity_100, Roughness = 0.9 },
+            new EnvMapFile{ Name = "specularity_00", Content = EmbeddedResources.Read("envmaps.specularity_00.vtf"), Roughness = 0.5 },
+            new EnvMapFile{ Name = "specularity_25", Content = EmbeddedResources.Read("envmaps.specularity_25.vtf"), Roughness = 0.7 },
+            new EnvMapFile{ Name = "specularity_50", Content = EmbeddedResources.Read("envmaps.specularity_50.vtf"), Roughness = 0.8 },
+            new EnvMapFile{ Name = "specularity_75", Content = EmbeddedResources.Read("envmaps.specularity_75.vtf"), Roughness = 0.85 },
+            new EnvMapFile{ Name = "specularity_100", Content = EmbeddedResources.Read("envmaps.specularity_100.vtf"), Roughness = 0.9 },
         };
 
         public class EnvMapFile
@@ -27,9 +24,8 @@ namespace mwb_materials.MwbMats
 
         public static string GetVMTVector(Color color)
         {
-            string vec = "[" + Math.Round(color.R / 255.0, 3) + " " + Math.Round(color.G / 255.0, 3) + " " + Math.Round(color.B / 255.0, 3) + "]";
-            vec = vec.Replace(",", ".");
-            return vec;
+            System.Globalization.CultureInfo invariant = System.Globalization.CultureInfo.InvariantCulture;
+            return "[" + Math.Round(color.R / 255.0, 3).ToString(invariant) + " " + Math.Round(color.G / 255.0, 3).ToString(invariant) + " " + Math.Round(color.B / 255.0, 3).ToString(invariant) + "]";
         }
 
         public static EnvMapFile GetEnvMapTextureFromRoughness(double averageRoughness)
@@ -49,17 +45,15 @@ namespace mwb_materials.MwbMats
 
         public static string GetVMTPath(string originalPath)
         {
-            string vmtPath = string.Empty;
-
-            if (originalPath.Contains("materials"))
+            if (string.IsNullOrEmpty(originalPath))
             {
-                vmtPath = originalPath;
-                vmtPath = vmtPath.Substring(vmtPath.IndexOf("materials"));
-                vmtPath = vmtPath.Replace("materials", string.Empty);
-                vmtPath = vmtPath.Trim(new char[] { '\\' });
+                return string.Empty;
             }
 
-            return vmtPath;
+            string[] parts = originalPath.Split(new char[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            int materialsIndex = Array.FindLastIndex(parts, part => string.Equals(part, "materials", StringComparison.OrdinalIgnoreCase));
+
+            return materialsIndex < 0 ? string.Empty : string.Join("\\", parts.Skip(materialsIndex + 1));
         }
     }
 }

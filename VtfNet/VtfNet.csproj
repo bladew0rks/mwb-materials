@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>VtfNet</RootNamespace>
+    <Description>Managed reader/writer for Valve Texture Format (VTF) files with a multithreaded DXT/BC encoder.</Description>
+  </PropertyGroup>
+
+</Project>

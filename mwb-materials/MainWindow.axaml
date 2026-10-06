@@ -1,0 +1,154 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="mwb_materials.MainWindow"
+        Title="MWB Mats"
+        Width="1000" Height="800"
+        MinWidth="820" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource WindowBrush}">
+
+  <Grid RowDefinitions="Auto,*" Margin="16">
+
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="2,0,2,14">
+      <StackPanel Orientation="Vertical" Spacing="2">
+        <TextBlock Text="MWB Mats" FontSize="20" FontWeight="Bold" />
+        <TextBlock Text="PBR textures to Source engine phong materials" Classes="label" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <Button x:Name="RestoreDefaultsButton" Content="Restore defaults" />
+        <Button x:Name="HelpButton" Content="Help" />
+      </StackPanel>
+    </Grid>
+
+    <Grid Grid.Row="1" ColumnDefinitions="430,16,*">
+
+      <ScrollViewer x:Name="SettingsPanel" Grid.Column="0" VerticalScrollBarVisibility="Auto" Padding="0,0,14,0">
+        <StackPanel Spacing="12">
+
+          <Border Classes="card">
+            <StackPanel Spacing="4">
+              <TextBlock Text="MAPS" Classes="cardTitle" />
+              <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
+                <CheckBox x:Name="AoCheck" Content="Apply AO to masks" Grid.Row="0" Grid.Column="0" />
+                <CheckBox x:Name="InvertNormalBlueCheck" Content="Invert normal blue" Grid.Row="0" Grid.Column="1"
+                          ToolTip.Tip="Invert the blue channel of the normal map" />
+                <CheckBox x:Name="OpenGlNormalCheck" Content="Flip normal green" Grid.Row="1" Grid.Column="0"
+                          ToolTip.Tip="For OpenGL-style normal maps (Y+)" />
+                <CheckBox x:Name="InvertOpacityCheck" Content="Invert opacity" Grid.Row="1" Grid.Column="1"
+                          ToolTip.Tip="Invert the opacity mask (black becomes opaque, white becomes transparent)" />
+              </Grid>
+
+              <Grid ColumnDefinitions="110,*,52" RowDefinitions="Auto,Auto,Auto" Margin="0,6,0,0">
+                <TextBlock Text="AO on albedo" Classes="label" />
+                <Slider x:Name="AoStrengthSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="100"
+                        TickFrequency="5" IsSnapToTickEnabled="True" Margin="8,0" />
+                <TextBlock x:Name="AoStrengthValue" Grid.Column="2" Text="100%" Classes="value" />
+
+                <TextBlock Grid.Row="1" Text="Alphatest ref" Classes="label" />
+                <Slider x:Name="AlphatestSlider" Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="100" Value="50"
+                        TickFrequency="1" IsSnapToTickEnabled="True" Margin="8,0"
+                        ToolTip.Tip="$alphatestreference (threshold for $alphatest)" />
+                <TextBlock x:Name="AlphatestValue" Grid.Row="1" Grid.Column="2" Text="0.50" Classes="value" />
+
+                <TextBlock Grid.Row="2" Text="Max size" Classes="label" />
+                <ComboBox x:Name="ClampComboBox" Grid.Row="2" Grid.Column="1" Margin="8,4,8,0" />
+              </Grid>
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card">
+            <StackPanel Spacing="6">
+              <TextBlock Text="OUTPUT" Classes="cardTitle" />
+              <TextBlock Text="Output destination" Classes="label" />
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox x:Name="VmtDestinationPath" PlaceholderText="…/materials/models/your_model" />
+                <Button x:Name="BrowseDestinationButton" Grid.Column="1" Content="Browse" Margin="6,0,0,0" />
+              </Grid>
+              <TextBlock Text="Envmaps folder (optional, shared)" Classes="label" Margin="0,4,0,0" />
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox x:Name="EnvMapsDestination" PlaceholderText="Defaults to the output destination" />
+                <Button x:Name="BrowseEnvMapsButton" Grid.Column="1" Content="Browse" Margin="6,0,0,0" />
+              </Grid>
+              <CheckBox x:Name="BatchMoveOutputCheck" Content="Move output to destination" Margin="0,4,0,0" />
+              <CheckBox x:Name="BatchIncludeFoldersCheck" Content="Generate folders in destination" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card">
+            <StackPanel>
+              <TextBlock Text="VTF" Classes="cardTitle" />
+              <Grid ColumnDefinitions="90,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6">
+                <TextBlock Text="Texture" Classes="label" FontSize="12" />
+                <TextBlock Grid.Column="1" Text="Format" Classes="label" FontSize="12" Margin="8,0" />
+                <TextBlock Grid.Column="2" Text="Mips" Classes="label" FontSize="12" />
+
+                <TextBlock x:Name="AlbedoLabel" Grid.Row="1" Text="Albedo" VerticalAlignment="Center" ToolTip.Tip="$basetexture" />
+                <ComboBox x:Name="AlbedoCompression" Grid.Row="1" Grid.Column="1" Margin="8,0" />
+                <CheckBox x:Name="AlbedoMipMapsCheck" Grid.Row="1" Grid.Column="2" />
+
+                <TextBlock x:Name="NormalLabel" Grid.Row="2" Text="Normal" VerticalAlignment="Center" ToolTip.Tip="$bumpmap" />
+                <ComboBox x:Name="NormalCompression" Grid.Row="2" Grid.Column="1" Margin="8,0" />
+                <CheckBox x:Name="NormalMipMapsCheck" Grid.Row="2" Grid.Column="2" />
+
+                <TextBlock x:Name="ExponentLabel" Grid.Row="3" Text="Exponent" VerticalAlignment="Center" ToolTip.Tip="$phongexponenttexture" />
+                <ComboBox x:Name="ExponentCompression" Grid.Row="3" Grid.Column="1" Margin="8,0" />
+                <CheckBox x:Name="ExponentMipMapsCheck" Grid.Row="3" Grid.Column="2" />
+              </Grid>
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card">
+            <StackPanel Spacing="4">
+              <TextBlock Text="BATCH" Classes="cardTitle" />
+              <CheckBox x:Name="UseModelMaterialNamesCheck" Content="Use model material names"
+                        ToolTip.Tip="Use SMD material names and glTF/GLB texture bindings when available" />
+              <CheckBox x:Name="KeepIntermediatesCheck" Content="Keep intermediate textures"
+                        ToolTip.Tip="Save the processed textures and extracted channels as PNGs in temp_debug" />
+              <Grid ColumnDefinitions="110,*,Auto" RowDefinitions="Auto,Auto" RowSpacing="8" Margin="0,6,0,0">
+                <TextBlock Text="VMT preset" Classes="label" />
+                <ComboBox x:Name="VmtPresetComboBox" Grid.Column="1" Margin="8,0"
+                          ToolTip.Tip="Presets are loaded from the presets folder next to the program and in your config folder" />
+                <Button x:Name="RefreshVmtPresetsButton" Grid.Column="2" Content="Refresh" ToolTip.Tip="Reload VMT presets from disk" />
+
+                <TextBlock Grid.Row="1" Text="Parallel jobs" Classes="label" />
+                <NumericUpDown x:Name="ParallelMaterialsUpDown" Grid.Row="1" Grid.Column="1" Margin="8,0"
+                               Minimum="1" Maximum="16" Increment="1" FormatString="0"
+                               ToolTip.Tip="Materials converted at the same time. Each one already uses all cores; raise this for many small textures, lower it if you run out of memory." />
+              </Grid>
+            </StackPanel>
+          </Border>
+
+        </StackPanel>
+      </ScrollViewer>
+
+      <Grid Grid.Column="2" RowDefinitions="Auto,Auto,*">
+        <Grid ColumnDefinitions="*,Auto">
+          <Button x:Name="FolderButton" Classes="accent" Height="46" HorizontalAlignment="Stretch"
+                  HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                  FontSize="15" FontWeight="SemiBold" Content="Open folder…" />
+          <Button x:Name="CancelButton" Grid.Column="1" Height="46" Margin="8,0,0,0" Content="Cancel" IsVisible="False" />
+        </Grid>
+
+        <StackPanel Grid.Row="1" Spacing="6" Margin="0,12,0,12">
+          <ProgressBar x:Name="BatchProgress" Minimum="0" Maximum="1" Value="0" Height="6" />
+          <TextBlock x:Name="StatusText" Text="Pick a material folder (or a folder of material folders) to convert."
+                     Classes="label" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+
+        <Border Grid.Row="2" Classes="card" Padding="0">
+          <Grid RowDefinitions="Auto,*">
+            <Grid ColumnDefinitions="*,Auto" Margin="14,8,8,4">
+              <TextBlock Text="LOG" Classes="cardTitle" Margin="0" VerticalAlignment="Center" />
+              <Button x:Name="ClearLogButton" Grid.Column="1" Content="Clear" Padding="10,3" FontSize="12" />
+            </Grid>
+            <TextBox x:Name="ConsoleTextBox" Grid.Row="1" Margin="6,0,6,6"
+                     IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                     FontFamily="{StaticResource MonoFont}" FontSize="12"
+                     Background="{StaticResource LogBrush}" BorderThickness="0"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto" />
+          </Grid>
+        </Border>
+      </Grid>
+    </Grid>
+  </Grid>
+</Window>

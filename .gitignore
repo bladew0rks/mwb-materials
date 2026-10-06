@@ -7,3 +7,6 @@ test-dxt5.dds
 FVM/
 PhilLibX/
 GameImageUtil/
+publish/
+*.user
+TestResults/
