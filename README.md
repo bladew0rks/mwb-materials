@@ -8,6 +8,12 @@ If you need help click ![here](https://github.com/9lbw/mwb-materials/blob/main/h
 
 ## Note for me
 
+After cloning, fetch the SharpBcn submodule:
+
+```sh
+git submodule update --init
+```
+
 Debug build:
 
 ```sh

@@ -1,0 +1,3 @@
+[submodule "SharpBcn"]
+	path = SharpBcn
+	url = https://github.com/bladew0rks/sharpbcn.git
