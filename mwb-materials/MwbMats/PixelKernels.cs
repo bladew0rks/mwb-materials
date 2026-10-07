@@ -63,7 +63,7 @@ namespace mwb_materials.MwbMats
 
         public static byte[] ExtractChannel(byte[] rgba, int channel)
         {
-            byte[] gray = new byte[rgba.Length / 4];
+            byte[] gray = GC.AllocateUninitializedArray<byte>(rgba.Length / 4);
             int shift = channel * 8;
 
             ParallelPixels.For(gray.Length, (start, end) =>

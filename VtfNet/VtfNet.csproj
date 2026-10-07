@@ -6,34 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>VtfNet</RootNamespace>
-    <Description>Managed reader/writer for Valve Texture Format (VTF) files with a multithreaded DXT/BC encoder.</Description>
+    <Description>Managed reader/writer for Valve Texture Format (VTF) files.</Description>
   </PropertyGroup>
 
-  <UsingTask TaskName="GenerateWideSimd" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
-    <ParameterGroup>
-      <Source ParameterType="System.String" Required="true" />
-      <Destination ParameterType="System.String" Required="true" />
-    </ParameterGroup>
-    <Task>
-      <Code Type="Fragment" Language="cs"><![CDATA[
-        string text = System.IO.File.ReadAllText(Source)
-            .Replace("Vector256", "Vector512")
-            .Replace("class BcEncoderSimd", "class BcEncoderSimd512")
-            .Replace("public const int Lanes = 8;", "public const int Lanes = 16;");
-        if (!System.IO.File.Exists(Destination) || System.IO.File.ReadAllText(Destination) != text)
-        {
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Destination));
-            System.IO.File.WriteAllText(Destination, text);
-        }
-      ]]></Code>
-    </Task>
-  </UsingTask>
-
-  <Target Name="GenerateBcEncoderSimd512" BeforeTargets="CoreCompile">
-    <GenerateWideSimd Source="$(MSBuildProjectDirectory)/Compression/BcEncoderSimd.cs" Destination="$(IntermediateOutputPath)BcEncoderSimd512.g.cs" />
-    <ItemGroup>
-      <Compile Include="$(IntermediateOutputPath)BcEncoderSimd512.g.cs" />
-    </ItemGroup>
-  </Target>
+  <ItemGroup>
+    <ProjectReference Include="..\SharpBcn\SharpBcn.csproj" />
+  </ItemGroup>
 
 </Project>

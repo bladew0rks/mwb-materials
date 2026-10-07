@@ -92,7 +92,7 @@ public static class ImageResampler
         }
 
         int sourcePixels = srcWidth * srcHeight;
-        float[] premultiplied = new float[sourcePixels * 4];
+        float[] premultiplied = GC.AllocateUninitializedArray<float>(sourcePixels * 4);
 
         For(srcHeight, sourcePixels, y =>
         {
@@ -132,18 +132,18 @@ public static class ImageResampler
     {
         Contributions horizontal = Contributions.Build(srcWidth, dstWidth, filter, edge);
         Contributions vertical = Contributions.Build(srcHeight, dstHeight, filter, edge);
-        TOut[] output = new TOut[dstWidth * dstHeight * channels];
+        TOut[] output = GC.AllocateUninitializedArray<TOut>(dstWidth * dstHeight * channels);
 
         if ((long)dstWidth * srcHeight <= (long)srcWidth * dstHeight)
         {
-            float[] temp = new float[dstWidth * srcHeight * channels];
+            float[] temp = GC.AllocateUninitializedArray<float>(dstWidth * srcHeight * channels);
 
             For(srcHeight, (long)srcHeight * horizontal.Taps, y => HorizontalPass(source, y * srcWidth, temp, y * dstWidth, horizontal, channels));
             For(dstHeight, (long)dstWidth * vertical.Taps, y => VerticalPass(temp, dstWidth, vertical, y, output, channels));
         }
         else
         {
-            float[] temp = new float[srcWidth * dstHeight * channels];
+            float[] temp = GC.AllocateUninitializedArray<float>(srcWidth * dstHeight * channels);
 
             For(dstHeight, (long)srcWidth * vertical.Taps, y => VerticalPass(source, srcWidth, vertical, y, temp, channels));
             For(dstHeight, (long)dstHeight * horizontal.Taps, y => HorizontalPass(temp, y * srcWidth, output, y * dstWidth, horizontal, channels));
@@ -171,7 +171,7 @@ public static class ImageResampler
     {
         int dstWidth = srcWidth / 2;
         int dstHeight = srcHeight / 2;
-        byte[] output = new byte[dstWidth * dstHeight * channels];
+        byte[] output = GC.AllocateUninitializedArray<byte>(dstWidth * dstHeight * channels);
         int srcStride = srcWidth * channels;
 
         For(dstHeight, (long)dstWidth * 4, y =>
@@ -296,7 +296,7 @@ public static class ImageResampler
     {
         int dstWidth = srcWidth / 2;
         int dstHeight = srcHeight / 2;
-        byte[] output = new byte[dstWidth * dstHeight * 4];
+        byte[] output = GC.AllocateUninitializedArray<byte>(dstWidth * dstHeight * 4);
         int srcStride = srcWidth * 4;
 
         For(dstHeight, (long)dstWidth * 4, y =>

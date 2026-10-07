@@ -732,7 +732,7 @@ namespace mwb_materials
             return "blue(" + fileName + ")";
         }
 
-        private enum SourceRole
+        internal enum SourceRole
         {
             None,
             CodNog,
@@ -820,7 +820,7 @@ namespace mwb_materials
                 role == SourceRole.Metalness || role == SourceRole.Alphatest || role == SourceRole.Translucent;
         }
 
-        private sealed class LoadedSource
+        internal sealed class LoadedSource
         {
             public string File;
             public string Name;
@@ -850,7 +850,44 @@ namespace mwb_materials
 
         #endregion
 
-        public static async Task<SourceTextureSet> GenerateTextures(List<string> files, GenerateProperties props, CancellationToken cancellationToken = default)
+        internal sealed class SourceSet
+        {
+            internal List<LoadedSource> Sources;
+            internal long DecodeMs;
+        }
+
+        public static async Task<SourceSet> LoadSources(List<string> files, CancellationToken cancellationToken = default)
+        {
+            List<LoadedSource> sources = files
+                .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+                .Select(file =>
+                {
+                    string name = Path.GetFileNameWithoutExtension(file).ToLower();
+                    return new LoadedSource() { File = file, Name = name, FileName = Path.GetFileName(file), Role = Classify(name) };
+                })
+                .Where(source => source.Role != SourceRole.None)
+                .ToList();
+
+            Stopwatch timer = Stopwatch.StartNew();
+
+            await Task.WhenAll(sources.Select(source => Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (IsGrayRole(source.Role))
+                {
+                    source.Gray = ImageLoader.LoadGray(source.File, out source.Stats);
+                }
+                else
+                {
+                    source.Rgba = ImageLoader.LoadRgba(source.File, out source.HasAlpha, out source.Stats);
+                }
+            }, cancellationToken)));
+
+            return new SourceSet() { Sources = sources, DecodeMs = timer.ElapsedMilliseconds };
+        }
+
+        public static async Task<SourceTextureSet> GenerateTextures(SourceSet sourceSet, GenerateProperties props, CancellationToken cancellationToken = default)
         {
             const int PackedPriority = 10;
             const int DerivedPriority = 20;
@@ -895,34 +932,9 @@ namespace mwb_materials
                 biggestHeight = Math.Max(biggestHeight, height);
             }
 
-            List<LoadedSource> sources = files
-                .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
-                .Select(file =>
-                {
-                    string name = Path.GetFileNameWithoutExtension(file).ToLower();
-                    return new LoadedSource() { File = file, Name = name, FileName = Path.GetFileName(file), Role = Classify(name) };
-                })
-                .Where(source => source.Role != SourceRole.None)
-                .ToList();
-
+            List<LoadedSource> sources = sourceSet.Sources;
+            long decodeMs = sourceSet.DecodeMs;
             Stopwatch stageTimer = Stopwatch.StartNew();
-
-            await Task.WhenAll(sources.Select(source => Task.Run(() =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (IsGrayRole(source.Role))
-                {
-                    source.Gray = ImageLoader.LoadGray(source.File, out source.Stats);
-                }
-                else
-                {
-                    source.Rgba = ImageLoader.LoadRgba(source.File, out source.HasAlpha, out source.Stats);
-                }
-            }, cancellationToken)));
-
-            long decodeMs = stageTimer.ElapsedMilliseconds;
-            stageTimer.Restart();
 
             foreach (LoadedSource source in sources)
             {

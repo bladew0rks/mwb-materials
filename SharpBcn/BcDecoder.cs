@@ -1,9 +1,19 @@
 using System.Buffers.Binary;
 
-namespace VtfNet.Compression;
+namespace SharpBcn;
 
 public static class BcDecoder
 {
+    public static byte[] Decode(BcFormat format, ReadOnlySpan<byte> data, int width, int height) => format switch
+    {
+        BcFormat.Bc1 or BcFormat.Bc1Alpha => DecodeBc1(data, width, height),
+        BcFormat.Bc2 => DecodeBc2(data, width, height),
+        BcFormat.Bc3 => DecodeBc3(data, width, height),
+        BcFormat.Bc4 => DecodeBc4(data, width, height),
+        BcFormat.Bc5 => DecodeBc5(data, width, height),
+        _ => throw new ArgumentOutOfRangeException(nameof(format), format, null),
+    };
+
     public static byte[] DecodeBc1(ReadOnlySpan<byte> data, int width, int height, bool oneBitAlpha = true)
     {
         return DecodeBlocks(data, width, height, 8, (block, pixels) => DecodeColorBlock(block, pixels, !oneBitAlpha));

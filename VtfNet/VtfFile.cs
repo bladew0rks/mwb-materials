@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Text;
-using VtfNet.Compression;
 using VtfNet.Processing;
 
 namespace VtfNet;
@@ -259,7 +258,7 @@ public sealed class VtfFile
         Parallel.For(0, images.Count, i => chains[i] = BuildMipChain(images[i], width, height, mipmaps, options.MipmapFilter, options.AlphaWeightedMipmaps));
 
         long dataSize = ComputeImageDataSize(width, height, 1, mipmaps, frames, options.FaceCount, storedFormat);
-        file.ImageData = new byte[checked((int)dataSize)];
+        file.ImageData = GC.AllocateUninitializedArray<byte>(checked((int)dataSize));
 
         var work = new List<(int Image, int Level)>();
 
@@ -429,16 +428,52 @@ public sealed class VtfFile
 
     public static float[] ComputeImageReflectivity(ReadOnlySpan<byte> rgba, int width, int height)
     {
-        Span<float> table = stackalloc float[256];
+        float[] table = new float[256];
 
         for (int i = 0; i < 256; i++)
         {
             table[i] = MathF.Pow(i / 255f, 2.2f);
         }
 
+        float[] rows = GC.AllocateUninitializedArray<float>(height * 3);
+        ReflectivityRows(rgba, width, height, table, rows);
+
         double x = 0, y = 0, z = 0;
 
         for (int row = 0; row < height; row++)
+        {
+            x += rows[row * 3];
+            y += rows[row * 3 + 1];
+            z += rows[row * 3 + 2];
+        }
+
+        return [(float)(x / height), (float)(y / height), (float)(z / height)];
+    }
+
+    private static unsafe void ReflectivityRows(ReadOnlySpan<byte> rgba, int width, int height, float[] table, float[] rows)
+    {
+        if (height < 64 || width < 64)
+        {
+            ReflectivityRange(rgba, width, 0, height, table, rows);
+            return;
+        }
+
+        fixed (byte* pointer = rgba)
+        {
+            byte* source = pointer;
+            int length = rgba.Length;
+            int chunk = Math.Max(16, height / (Environment.ProcessorCount * 4));
+            Parallel.For(0, (height + chunk - 1) / chunk, c =>
+            {
+                int first = c * chunk;
+                ReflectivityRange(new ReadOnlySpan<byte>(source, length), width, first, Math.Min(height, first + chunk), table, rows);
+            });
+        }
+    }
+
+    private static void ReflectivityRange(ReadOnlySpan<byte> rgba, int width, int start, int end, float[] table, float[] rows)
+    {
+        for (int row = start; row < end; row++)
         {
             float rx = 0, ry = 0, rz = 0;
             ReadOnlySpan<byte> line = rgba.Slice(row * width * 4, width * 4);
@@ -450,12 +485,10 @@ public sealed class VtfFile
                 rz += table[line[i * 4 + 2]];
             }
 
-            x += rx / width;
-            y += ry / width;
-            z += rz / width;
+            rows[row * 3] = rx / width;
+            rows[row * 3 + 1] = ry / width;
+            rows[row * 3 + 2] = rz / width;
         }
-
-        return [(float)(x / height), (float)(y / height), (float)(z / height)];
     }
 
     #endregion

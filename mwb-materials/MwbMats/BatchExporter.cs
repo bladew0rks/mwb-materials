@@ -80,42 +80,101 @@ namespace mwb_materials.MwbMats
                 progress?.Report(new BatchProgress(completed, jobs.Count, string.Join(", ", running)));
             }
 
+            using CancellationTokenSource pipeline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using SemaphoreSlim decodeSlots = new SemaphoreSlim(maxParallel + 1);
+            TaskCompletionSource<MaterialManipulation.SourceSet>[] decoded = jobs
+                .Select(_ => new TaskCompletionSource<MaterialManipulation.SourceSet>(TaskCreationOptions.RunContinuationsAsynchronously))
+                .ToArray();
+
+            Task decoder = Task.Run(async () =>
+            {
+                for (int i = 0; i < jobs.Count; i++)
+                {
+                    try
+                    {
+                        await decodeSlots.WaitAsync(pipeline.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        for (int j = i; j < jobs.Count; j++)
+                        {
+                            decoded[j].TrySetCanceled(pipeline.Token);
+                        }
+
+                        return;
+                    }
+
+                    int index = i;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            decoded[index].TrySetResult(await MaterialManipulation.LoadSources(jobs[index].Job.Files, pipeline.Token));
+                        }
+                        catch (Exception ex)
+                        {
+                            decoded[index].TrySetException(ex);
+                        }
+                    });
+                }
+            });
+
             ParallelOptions options = new ParallelOptions()
             {
                 MaxDegreeOfParallelism = maxParallel,
-                CancellationToken = cancellationToken
+                CancellationToken = pipeline.Token
             };
 
-            await Parallel.ForEachAsync(jobs, options, async (pending, token) =>
+            try
             {
-                lock (progressGate)
+                await Parallel.ForEachAsync(Enumerable.Range(0, jobs.Count), options, async (index, token) =>
                 {
-                    running.Add(pending.Job.DisplayName);
-                    ReportProgress();
-                }
+                    PendingJob pending = jobs[index];
+                    MaterialManipulation.SourceSet sources = await decoded[index].Task.WaitAsync(token);
 
-                BatchProperties jobProps = props;
+                    lock (progressGate)
+                    {
+                        running.Add(pending.Job.DisplayName);
+                        ReportProgress();
+                    }
 
-                if (maxParallel > 1 && props.LogFunc != null)
-                {
-                    string prefix = "[" + pending.Job.DisplayName + "] ";
-                    Action<string> log = props.LogFunc;
-                    jobProps.LogFunc = message => log(prefix + message);
-                    MaterialManipulation.GenerateProperties generateProps = jobProps.GenerateProps;
-                    generateProps.LogFunc = jobProps.LogFunc;
-                    jobProps.GenerateProps = generateProps;
-                }
+                    BatchProperties jobProps = props;
 
-                jobProps.LogFunc?.Invoke("Processing " + pending.Job.DisplayName + " (" + pending.Job.Files.Count + " source textures)");
-                await GenerateJob(pending.FolderPath, path, pending.DebugPath, pending.Job, jobProps, token);
+                    if (maxParallel > 1 && props.LogFunc != null)
+                    {
+                        string prefix = "[" + pending.Job.DisplayName + "] ";
+                        Action<string> log = props.LogFunc;
+                        jobProps.LogFunc = message => log(prefix + message);
+                        MaterialManipulation.GenerateProperties generateProps = jobProps.GenerateProps;
+                        generateProps.LogFunc = jobProps.LogFunc;
+                        jobProps.GenerateProps = generateProps;
+                    }
 
-                lock (progressGate)
-                {
-                    running.Remove(pending.Job.DisplayName);
-                    completed++;
-                    ReportProgress();
-                }
-            });
+                    jobProps.LogFunc?.Invoke("Processing " + pending.Job.DisplayName + " (" + pending.Job.Files.Count + " source textures)");
+
+                    try
+                    {
+                        await GenerateJob(pending.FolderPath, path, pending.DebugPath, pending.Job, sources, jobProps, token);
+                    }
+                    finally
+                    {
+                        decoded[index] = null;
+                        decodeSlots.Release();
+                    }
+
+                    lock (progressGate)
+                    {
+                        running.Remove(pending.Job.DisplayName);
+                        completed++;
+                        ReportProgress();
+                    }
+                });
+            }
+            finally
+            {
+                pipeline.Cancel();
+                await decoder;
+            }
 
             return jobs.Count;
         }
@@ -223,9 +282,9 @@ namespace mwb_materials.MwbMats
                 .Any(file => Path.GetFullPath(file).StartsWith(folderRoot, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static async Task GenerateJob(string path, string startPath, string debugPath, TextureGenerationJob job, BatchProperties props, CancellationToken cancellationToken)
+        private static async Task GenerateJob(string path, string startPath, string debugPath, TextureGenerationJob job, MaterialManipulation.SourceSet sources, BatchProperties props, CancellationToken cancellationToken)
         {
-            MaterialManipulation.SourceTextureSet textures = await MaterialManipulation.GenerateTextures(job.Files, props.GenerateProps, cancellationToken);
+            MaterialManipulation.SourceTextureSet textures = await MaterialManipulation.GenerateTextures(sources, props.GenerateProps, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
             //resolve opacity-related settings

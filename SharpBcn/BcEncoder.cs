@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 
-namespace VtfNet.Compression;
+namespace SharpBcn;
 
 public static class BcEncoder
 {
@@ -9,6 +9,10 @@ public static class BcEncoder
 
     private static readonly byte[] SingleColor5 = BuildSingleColorTable(5);
     private static readonly byte[] SingleColor6 = BuildSingleColorTable(6);
+
+    public static int GetBlockSize(BcFormat format) => format is BcFormat.Bc1 or BcFormat.Bc1Alpha or BcFormat.Bc4 ? 8 : 16;
+
+    public static int GetCompressedSize(int width, int height, BcFormat format) => GetCompressedSize(width, height, GetBlockSize(format));
 
     public static int GetCompressedSize(int width, int height, int blockSize)
     {
@@ -19,65 +23,52 @@ public static class BcEncoder
 
     public static byte[] EncodeBc1(ReadOnlySpan<byte> rgba, int width, int height, int alphaThreshold = 0, bool parallel = true)
     {
-        byte[] output = new byte[GetCompressedSize(width, height, 8)];
-        EncodeBlocks<Bc1Block>(rgba, width, height, output, 0, alphaThreshold, parallel, PreferredSimdWidth);
+        byte[] output = GC.AllocateUninitializedArray<byte>(GetCompressedSize(width, height, 8));
+        EncodeBlocks<Bc1Block>(rgba, width, height, output, alphaThreshold, parallel, PreferredSimdWidth);
         return output;
     }
 
-    public static byte[] EncodeBc2(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true)
+    public static byte[] EncodeBc2(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true) => Encode(BcFormat.Bc2, rgba, width, height, parallel: parallel);
+
+    public static byte[] EncodeBc3(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true) => Encode(BcFormat.Bc3, rgba, width, height, parallel: parallel);
+
+    public static byte[] EncodeBc4(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true) => Encode(BcFormat.Bc4, rgba, width, height, parallel: parallel);
+
+    public static byte[] EncodeBc5(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true) => Encode(BcFormat.Bc5, rgba, width, height, parallel: parallel);
+
+    public static byte[] Encode(BcFormat format, ReadOnlySpan<byte> rgba, int width, int height, int alphaThreshold = 128, bool parallel = true)
     {
-        byte[] output = new byte[GetCompressedSize(width, height, 16)];
-        EncodeBlocks<Bc2Block>(rgba, width, height, output, 0, 0, parallel, PreferredSimdWidth);
+        byte[] output = GC.AllocateUninitializedArray<byte>(GetCompressedSize(width, height, format));
+        Encode(format, rgba, width, height, output, alphaThreshold, parallel);
         return output;
     }
 
-    public static byte[] EncodeBc3(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true)
-    {
-        byte[] output = new byte[GetCompressedSize(width, height, 16)];
-        EncodeBlocks<Bc3Block>(rgba, width, height, output, 0, 0, parallel, PreferredSimdWidth);
-        return output;
-    }
-
-    public static byte[] EncodeBc4(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true)
-    {
-        byte[] output = new byte[GetCompressedSize(width, height, 8)];
-        EncodeBlocks<Bc4Block>(rgba, width, height, output, 0, 0, parallel, PreferredSimdWidth);
-        return output;
-    }
-
-    public static byte[] EncodeBc5(ReadOnlySpan<byte> rgba, int width, int height, bool parallel = true)
-    {
-        byte[] output = new byte[GetCompressedSize(width, height, 16)];
-        EncodeBlocks<Bc5Block>(rgba, width, height, output, 0, 0, parallel, PreferredSimdWidth);
-        return output;
-    }
-
-    public static void Encode(VtfImageFormat format, ReadOnlySpan<byte> rgba, int width, int height, byte[] output, int outputOffset, int alphaThreshold = 0, bool parallel = true)
+    public static void Encode(BcFormat format, ReadOnlySpan<byte> rgba, int width, int height, Span<byte> output, int alphaThreshold = 128, bool parallel = true)
     {
         int simdWidth = PreferredSimdWidth;
 
         switch (format)
         {
-            case VtfImageFormat.DXT1:
-                EncodeBlocks<Bc1Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
+            case BcFormat.Bc1:
+                EncodeBlocks<Bc1Block>(rgba, width, height, output, 0, parallel, simdWidth);
                 break;
-            case VtfImageFormat.DXT1OneBitAlpha:
-                EncodeBlocks<Bc1Block>(rgba, width, height, output, outputOffset, Math.Max(1, alphaThreshold), parallel, simdWidth);
+            case BcFormat.Bc1Alpha:
+                EncodeBlocks<Bc1Block>(rgba, width, height, output, Math.Max(1, alphaThreshold), parallel, simdWidth);
                 break;
-            case VtfImageFormat.DXT3:
-                EncodeBlocks<Bc2Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
+            case BcFormat.Bc2:
+                EncodeBlocks<Bc2Block>(rgba, width, height, output, 0, parallel, simdWidth);
                 break;
-            case VtfImageFormat.DXT5:
-                EncodeBlocks<Bc3Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
+            case BcFormat.Bc3:
+                EncodeBlocks<Bc3Block>(rgba, width, height, output, 0, parallel, simdWidth);
                 break;
-            case VtfImageFormat.ATI1N:
-                EncodeBlocks<Bc4Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
+            case BcFormat.Bc4:
+                EncodeBlocks<Bc4Block>(rgba, width, height, output, 0, parallel, simdWidth);
                 break;
-            case VtfImageFormat.ATI2N:
-                EncodeBlocks<Bc5Block>(rgba, width, height, output, outputOffset, 0, parallel, simdWidth);
+            case BcFormat.Bc5:
+                EncodeBlocks<Bc5Block>(rgba, width, height, output, 0, parallel, simdWidth);
                 break;
             default:
-                throw new ArgumentException("Not a block-compressed format: " + format, nameof(format));
+                throw new ArgumentOutOfRangeException(nameof(format), format, null);
         }
     }
 
@@ -149,7 +140,7 @@ public static class BcEncoder
 
     private static int PreferredSimdWidth => BcEncoderSimd512.IsSupported ? 512 : BcEncoderSimd.IsSupported ? 256 : 0;
 
-    private static unsafe void EncodeBlocks<T>(ReadOnlySpan<byte> rgba, int width, int height, byte[] output, int outputOffset, int alphaThreshold, bool parallel, int simdWidth)
+    private static unsafe void EncodeBlocks<T>(ReadOnlySpan<byte> rgba, int width, int height, Span<byte> output, int alphaThreshold, bool parallel, int simdWidth)
         where T : struct, IBlockEncoder
     {
         if (rgba.Length < width * height * 4)
@@ -161,20 +152,22 @@ public static class BcEncoder
         int blocksY = Math.Max(1, (height + 3) / 4);
         int blockSize = T.BlockSize;
 
-        if (outputOffset < 0 || outputOffset + blocksX * blocksY * blockSize > output.Length)
+        if (blocksX * blocksY * blockSize > output.Length)
         {
             throw new ArgumentException("Output buffer is too small.", nameof(output));
         }
 
         fixed (byte* sourcePtr = rgba)
+        fixed (byte* outputPtr = output)
         {
             nint source = (nint)sourcePtr;
+            nint destination = (nint)outputPtr;
             int sourceLength = rgba.Length;
 
             void EncodeRow(int by)
             {
                 ReadOnlySpan<byte> src = new ReadOnlySpan<byte>((void*)source, sourceLength);
-                Span<byte> row = output.AsSpan(outputOffset + by * blocksX * blockSize, blocksX * blockSize);
+                Span<byte> row = new Span<byte>((byte*)destination + by * blocksX * blockSize, blocksX * blockSize);
 
                 if (simdWidth == 512)
                 {
@@ -320,16 +313,215 @@ public static class BcEncoder
             }
         }
 
-        SearchColorEndpoints(colors, bestEndpoints, bestIndices, ref bestError);
+        if (ClusterFit(colors, bestIndices, bestEndpoints, ref bestError, ClusterOrderingsPerBlock))
+        {
+            ClusterFit(colors, bestIndices, bestEndpoints, ref bestError, 0);
+        }
+
+        SearchColorEndpoints(colors, bestEndpoints, ref bestError);
+        MatchFourColor(colors, bestEndpoints, bestIndices);
         WriteFourColorBlock(bestEndpoints, bestIndices, dest);
     }
 
     internal const int EndpointSearchRounds = 4;
 
-    private static void SearchColorEndpoints(ReadOnlySpan<int> colors, Span<int> endpoints, Span<byte> indices, ref long error)
+    internal static readonly (int First, int Second)[] SortNetwork = BuildSortNetwork();
+
+    internal const int ClusterOrderingsPerBlock = 8;
+
+    private static readonly short[] HistogramLookup = BuildHistogramLookup();
+
+    internal static int HistogramIndex(int h0, int h1, int h2) => HistogramLookup[h0 + 17 * (h1 + 17 * h2)];
+
+    private static short[] BuildHistogramLookup()
+    {
+        short[] lookup = new short[17 * 17 * 17];
+        ReadOnlySpan<byte> histograms = ClusterTables.Histograms;
+
+        for (int i = 0; i < histograms.Length / 4; i++)
+        {
+            lookup[histograms[i * 4] + 17 * (histograms[i * 4 + 1] + 17 * histograms[i * 4 + 2])] = (short)i;
+        }
+
+        return lookup;
+    }
+
+    private static (int, int)[] BuildSortNetwork()
+    {
+        var pairs = new List<(int, int)>();
+
+        for (int p = 1; p < 16; p <<= 1)
+        {
+            for (int k = p; k >= 1; k >>= 1)
+            {
+                for (int j = k % p; j <= 15 - k; j += 2 * k)
+                {
+                    for (int i = 0; i <= Math.Min(k - 1, 15 - j - k); i++)
+                    {
+                        if ((i + j) / (2 * p) == (i + j + k) / (2 * p))
+                        {
+                            pairs.Add((i + j, i + j + k));
+                        }
+                    }
+                }
+            }
+        }
+
+        return [.. pairs];
+    }
+
+    internal static readonly int[][] GroupPatterns =
+    [
+        [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3],
+        [0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3],
+        [0, 1, 2, 3],
+    ];
+
+    private static bool ClusterFit(ReadOnlySpan<int> colors, ReadOnlySpan<byte> indices, Span<int> endpoints, ref long error, int orderingCount)
+    {
+        Span<int> keys = stackalloc int[16];
+        int dr = endpoints[3] - endpoints[0], dg = endpoints[4] - endpoints[1], db = endpoints[5] - endpoints[2];
+
+        for (int i = 0; i < 16; i++)
+        {
+            keys[i] = ((colors[i * 3] * dr + colors[i * 3 + 1] * dg + colors[i * 3 + 2] * db) << 4) | i;
+        }
+
+        keys.Sort();
+        Span<int> sorted = stackalloc int[48];
+        Span<int> totals = stackalloc int[3];
+        totals.Clear();
+
+        for (int i = 0; i < 16; i++)
+        {
+            int pixel = keys[i] & 15;
+
+            for (int c = 0; c < 3; c++)
+            {
+                sorted[i * 3 + c] = colors[pixel * 3 + c];
+                totals[c] += colors[pixel * 3 + c];
+            }
+        }
+
+        Span<int> fit = stackalloc int[6];
+        endpoints.CopyTo(fit);
+        long fitError = int.MaxValue;
+
+        if (orderingCount > 0)
+        {
+            int count0 = 0, count1 = 0, count2 = 0;
+
+            for (int i = 0; i < 16; i++)
+            {
+                count0 += indices[i] == 0 ? 1 : 0;
+                count1 += indices[i] == 2 ? 1 : 0;
+                count2 += indices[i] == 3 ? 1 : 0;
+            }
+
+            int start = HistogramIndex(count0, count1, count2) * ClusterTables.OrderingsPerHistogram;
+            ReadOnlySpan<byte> histograms = ClusterTables.Histograms;
+
+            for (int q = 0; q < orderingCount; q++)
+            {
+                int split = ClusterTables.BestOrderings[start + q] * 4;
+                TrySplit(colors, sorted, totals, histograms[split], histograms[split + 1], histograms[split + 2], fit, ref fitError);
+            }
+        }
+
+        Span<int> sizes = stackalloc int[4];
+        int group = 0;
+        sizes.Clear();
+        sizes[0] = 1;
+
+        for (int i = 1; i < 16; i++)
+        {
+            if (sorted[i * 3] != sorted[i * 3 - 3] || sorted[i * 3 + 1] != sorted[i * 3 - 2] || sorted[i * 3 + 2] != sorted[i * 3 - 1])
+            {
+                group++;
+            }
+
+            if (group < 4)
+            {
+                sizes[group]++;
+            }
+        }
+
+        int distinct = group + 1;
+        Span<int> h = stackalloc int[4];
+
+        foreach (int[] pattern in GroupPatterns)
+        {
+            if (pattern.Length != distinct)
+            {
+                continue;
+            }
+
+            h.Clear();
+
+            for (int j = 0; j < pattern.Length; j++)
+            {
+                h[pattern[j]] += sizes[j];
+            }
+
+            TrySplit(colors, sorted, totals, h[0], h[1], h[2], fit, ref fitError);
+        }
+
+        if (fitError >= error)
+        {
+            return false;
+        }
+
+        error = fitError;
+        fit.CopyTo(endpoints);
+        return true;
+    }
+
+    private static void TrySplit(ReadOnlySpan<int> colors, ReadOnlySpan<int> sorted, ReadOnlySpan<int> totals, int h0, int h1, int h2,
+        Span<int> fit, ref long fitError)
+    {
+        int h3 = 16 - h0 - h1 - h2;
+        int a2 = 9 * h0 + 4 * h1 + h2, b2 = h1 + 4 * h2 + 9 * h3, ab = 2 * (h1 + h2);
+        int det = a2 * b2 - ab * ab;
+
+        if (det == 0)
+        {
+            return;
+        }
+
+        Span<int> trial = stackalloc int[6];
+
+        for (int c = 0; c < 3; c++)
+        {
+            int p1 = 0, p2 = 0, p3 = 0;
+
+            for (int i = 0; i < 16; i++)
+            {
+                int value = sorted[i * 3 + c];
+                p1 += i < h0 ? value : 0;
+                p2 += i < h0 + h1 ? value : 0;
+                p3 += i < h0 + h1 + h2 ? value : 0;
+            }
+
+            int ax = 3 * p1 + 2 * (p2 - p1) + (p3 - p2);
+            int bx = (p2 - p1) + 2 * (p3 - p2) + 3 * (totals[c] - p3);
+            int c0 = Math.Clamp((int)MathF.Round((float)(3 * (ax * b2 - bx * ab)) / det), 0, 255);
+            int c1 = Math.Clamp((int)MathF.Round((float)(3 * (bx * a2 - ax * ab)) / det), 0, 255);
+            trial[c] = c == 1 ? Expand6(Quantize(c0, 6)) : Expand5(Quantize(c0, 5));
+            trial[3 + c] = c == 1 ? Expand6(Quantize(c1, 6)) : Expand5(Quantize(c1, 5));
+        }
+
+        long error = MatchFourColorError(colors, trial);
+
+        if (error < fitError)
+        {
+            fitError = error;
+            trial.CopyTo(fit);
+        }
+    }
+
+    private static void SearchColorEndpoints(ReadOnlySpan<int> colors, Span<int> endpoints, ref long error)
     {
         Span<int> trial = stackalloc int[6];
-        Span<byte> trialIndices = stackalloc byte[16];
 
         for (int round = 0; round < EndpointSearchRounds && error > 0; round++)
         {
@@ -351,13 +543,12 @@ public static class BcEncoder
 
                     endpoints.CopyTo(trial);
                     trial[e] = bits == 6 ? Expand6(level) : Expand5(level);
-                    long trialError = MatchFourColor(colors, trial, trialIndices);
+                    long trialError = MatchFourColorError(colors, trial);
 
                     if (trialError < error)
                     {
                         error = trialError;
                         trial.CopyTo(endpoints);
-                        trialIndices.CopyTo(indices);
                         improved = true;
                     }
                 }
@@ -556,6 +747,27 @@ public static class BcEncoder
     {
         return (Quantize(r, 5) << 11) | (Quantize(g, 6) << 5) | Quantize(b, 5);
     }
+
+    private static long MatchFourColorError(ReadOnlySpan<int> colors, ReadOnlySpan<int> endpoints)
+    {
+        int r2 = (2 * endpoints[0] + endpoints[3]) / 3, g2 = (2 * endpoints[1] + endpoints[4]) / 3, b2 = (2 * endpoints[2] + endpoints[5]) / 3;
+        int r3 = (endpoints[0] + 2 * endpoints[3]) / 3, g3 = (endpoints[1] + 2 * endpoints[4]) / 3, b3 = (endpoints[2] + 2 * endpoints[5]) / 3;
+        long total = 0;
+
+        for (int i = 0; i < 16; i++)
+        {
+            int r = colors[i * 3], g = colors[i * 3 + 1], b = colors[i * 3 + 2];
+            int e0 = Square(r - endpoints[0]) + Square(g - endpoints[1]) + Square(b - endpoints[2]);
+            int e1 = Square(r - endpoints[3]) + Square(g - endpoints[4]) + Square(b - endpoints[5]);
+            int e2 = Square(r - r2) + Square(g - g2) + Square(b - b2);
+            int e3 = Square(r - r3) + Square(g - g3) + Square(b - b3);
+            total += Math.Min(Math.Min(e0, e1), Math.Min(e2, e3));
+        }
+
+        return total;
+    }
+
+    private static int Square(int value) => value * value;
 
     private static long MatchFourColor(ReadOnlySpan<int> colors, ReadOnlySpan<int> endpoints, Span<byte> indices)
     {
@@ -806,11 +1018,10 @@ public static class BcEncoder
         }
 
         Span<int> palette = stackalloc int[8];
-        Span<byte> indices = stackalloc byte[16];
         Span<byte> bestIndices = stackalloc byte[16];
 
         BuildEightValuePalette(max, min, palette);
-        long bestError = MatchSingleChannel(values, palette, bestIndices);
+        long bestError = MatchError(values, palette);
         int best0 = max, best1 = min;
 
         if (min == 0 || max == 255)
@@ -818,18 +1029,30 @@ public static class BcEncoder
             int lo = innerMin <= innerMax ? innerMin : min;
             int hi = innerMin <= innerMax ? innerMax : max;
             BuildSixValuePalette(lo, hi, palette);
-            long error = MatchSingleChannel(values, palette, indices);
+            long error = MatchError(values, palette);
 
             if (error < bestError)
             {
                 bestError = error;
                 best0 = lo;
                 best1 = hi;
-                indices.CopyTo(bestIndices);
             }
         }
 
-        SearchAlphaEndpoints(values, ref best0, ref best1, bestIndices, ref bestError);
+        bool eightValues = best0 > best1;
+        SearchAlphaEndpoints(values, ref best0, ref best1, ref bestError);
+        SearchAlphaRange(values, ref best0, ref best1, ref bestError);
+
+        if (eightValues)
+        {
+            BuildEightValuePalette(best0, best1, palette);
+        }
+        else
+        {
+            BuildSixValuePalette(best0, best1, palette);
+        }
+
+        MatchSingleChannel(values, palette, bestIndices);
 
         dest[0] = (byte)best0;
         dest[1] = (byte)best1;
@@ -872,11 +1095,10 @@ public static class BcEncoder
         palette[7] = 255;
     }
 
-    private static void SearchAlphaEndpoints(ReadOnlySpan<int> values, ref int a0, ref int a1, Span<byte> indices, ref long error)
+    private static void SearchAlphaEndpoints(ReadOnlySpan<int> values, ref int a0, ref int a1, ref long error)
     {
         bool eightValues = a0 > a1;
         Span<int> palette = stackalloc int[8];
-        Span<byte> trialIndices = stackalloc byte[16];
 
         for (int round = 0; round < EndpointSearchRounds && error > 0; round++)
         {
@@ -903,14 +1125,13 @@ public static class BcEncoder
                         BuildSixValuePalette(t0, t1, palette);
                     }
 
-                    long trialError = MatchSingleChannel(values, palette, trialIndices);
+                    long trialError = MatchError(values, palette);
 
                     if (trialError < error)
                     {
                         error = trialError;
                         a0 = t0;
                         a1 = t1;
-                        trialIndices.CopyTo(indices);
                         improved = true;
                     }
                 }
@@ -921,6 +1142,80 @@ public static class BcEncoder
                 break;
             }
         }
+    }
+
+    internal const int AlphaSearchStep = 32;
+    internal const int AlphaSearchRounds = 2;
+
+    private static void SearchAlphaRange(ReadOnlySpan<int> values, ref int a0, ref int a1, ref long error)
+    {
+        bool eightValues = a0 > a1;
+        Span<int> palette = stackalloc int[8];
+
+        for (int step = AlphaSearchStep; step >= 1; step >>= 1)
+        {
+            for (int round = 0; round < AlphaSearchRounds && error > 0; round++)
+            {
+                bool improved = false;
+
+                for (int d0 = -step; d0 <= step; d0 += step)
+                {
+                    for (int d1 = -step; d1 <= step; d1 += step)
+                    {
+                        int t0 = a0 + d0;
+                        int t1 = a1 + d1;
+
+                        if ((d0 == 0 && d1 == 0) || t0 < 0 || t0 > 255 || t1 < 0 || t1 > 255 || (t0 > t1) != eightValues)
+                        {
+                            continue;
+                        }
+
+                        if (eightValues)
+                        {
+                            BuildEightValuePalette(t0, t1, palette);
+                        }
+                        else
+                        {
+                            BuildSixValuePalette(t0, t1, palette);
+                        }
+
+                        long trialError = MatchError(values, palette);
+
+                        if (trialError < error)
+                        {
+                            error = trialError;
+                            a0 = t0;
+                            a1 = t1;
+                            improved = true;
+                        }
+                    }
+                }
+
+                if (!improved)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    private static long MatchError(ReadOnlySpan<int> values, ReadOnlySpan<int> palette)
+    {
+        long total = 0;
+
+        for (int i = 0; i < 16; i++)
+        {
+            int nearest = Math.Abs(values[i] - palette[0]);
+
+            for (int p = 1; p < 8; p++)
+            {
+                nearest = Math.Min(nearest, Math.Abs(values[i] - palette[p]));
+            }
+
+            total += nearest * nearest;
+        }
+
+        return total;
     }
 
     private static long MatchSingleChannel(ReadOnlySpan<int> values, ReadOnlySpan<int> palette, Span<byte> indices)

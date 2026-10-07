@@ -91,7 +91,7 @@ namespace mwb_materials.MwbMats
             int rowBytes = width * bpp;
 
             int channels = colorType == 3 ? (transparency != null ? 4 : 3) : samples;
-            byte[] output = new byte[width * height * channels];
+            byte[] output = GC.AllocateUninitializedArray<byte>(width * height * channels);
             idat.Position = 0;
 
             bool ok = (long)rowBytes * height >= PipelineThresholdBytes

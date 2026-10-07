@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 
-namespace VtfNet.Compression;
+namespace SharpBcn;
 
 internal static class BcEncoderSimd
 {
@@ -184,7 +184,15 @@ internal static class BcEncoderSimd
             }
         }
 
-        SearchColorEndpoints(r, g, b, ref best, bestIndices, ref bestError);
+        Vector256<int> retry = ClusterFit(r, g, b, bestIndices, ref best, ref bestError, BcEncoder.ClusterOrderingsPerBlock, Vector256<int>.AllBitsSet);
+
+        if (retry != Vector256<int>.Zero)
+        {
+            ClusterFit(r, g, b, bestIndices, ref best, ref bestError, 0, retry);
+        }
+
+        SearchColorEndpoints(r, g, b, ref best, ref bestError);
+        MatchFourColor(r, g, b, best, bestIndices);
 
         Vector256<int> c0 = Pack565(best.R0, best.G0, best.B0);
         Vector256<int> c1 = Pack565(best.R1, best.G1, best.B1);
@@ -208,11 +216,201 @@ internal static class BcEncoderSimd
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    private static void SearchColorEndpoints(ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g, ReadOnlySpan<Vector256<int>> b,
-        ref Endpoints best, Span<Vector256<int>> indices, ref Vector256<int> error)
+    private static Vector256<int> ClusterFit(ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g, ReadOnlySpan<Vector256<int>> b,
+        ReadOnlySpan<Vector256<int>> indices, ref Endpoints best, ref Vector256<int> bestError, int orderingCount, Vector256<int> active)
     {
-        Span<Vector256<int>> trialIndices = stackalloc Vector256<int>[16];
+        Span<Vector256<int>> keys = stackalloc Vector256<int>[16];
+        Span<Vector256<int>> rg = stackalloc Vector256<int>[16];
+        Span<Vector256<int>> bl = stackalloc Vector256<int>[16];
+        Vector256<int> dr = best.R1 - best.R0, dg = best.G1 - best.G0, db = best.B1 - best.B0;
 
+        for (int i = 0; i < 16; i++)
+        {
+            keys[i] = ((r[i] * dr + g[i] * dg + b[i] * db) << 4) | Vector256.Create(i);
+            rg[i] = r[i] | (g[i] << 16);
+            bl[i] = b[i];
+        }
+
+        foreach ((int first, int second) in BcEncoder.SortNetwork)
+        {
+            Vector256<int> k0 = keys[first], k1 = keys[second];
+            Vector256<int> swap = Vector256.GreaterThan(k0, k1);
+            keys[first] = Vector256.ConditionalSelect(swap, k1, k0);
+            keys[second] = Vector256.ConditionalSelect(swap, k0, k1);
+            Vector256<int> x0 = rg[first], x1 = rg[second];
+            rg[first] = Vector256.ConditionalSelect(swap, x1, x0);
+            rg[second] = Vector256.ConditionalSelect(swap, x0, x1);
+            x0 = bl[first];
+            x1 = bl[second];
+            bl[first] = Vector256.ConditionalSelect(swap, x1, x0);
+            bl[second] = Vector256.ConditionalSelect(swap, x0, x1);
+        }
+
+        Vector256<int> totalRg = Vector256<int>.Zero, totalB = Vector256<int>.Zero;
+
+        for (int i = 0; i < 16; i++)
+        {
+            totalRg += rg[i];
+            totalB += bl[i];
+        }
+
+        Endpoints fit = best;
+        Vector256<int> fitError = Vector256.Create(int.MaxValue);
+
+        if (orderingCount > 0)
+        {
+            Vector256<int> count0 = Vector256<int>.Zero, count1 = Vector256<int>.Zero, count2 = Vector256<int>.Zero;
+
+            for (int i = 0; i < 16; i++)
+            {
+                count0 -= Vector256.Equals(indices[i], Vector256<int>.Zero);
+                count1 -= Vector256.Equals(indices[i], Vector256.Create(2));
+                count2 -= Vector256.Equals(indices[i], Vector256.Create(3));
+            }
+
+            Span<int> plan = stackalloc int[3 * Lanes * orderingCount];
+            ReadOnlySpan<byte> histograms = ClusterTables.Histograms;
+            ReadOnlySpan<ushort> orderings = ClusterTables.BestOrderings;
+
+            for (int lane = 0; lane < Lanes; lane++)
+            {
+                int start = BcEncoder.HistogramIndex(count0.GetElement(lane), count1.GetElement(lane), count2.GetElement(lane)) * ClusterTables.OrderingsPerHistogram;
+
+                for (int q = 0; q < orderingCount; q++)
+                {
+                    int split = orderings[start + q] * 4;
+                    plan[q * 3 * Lanes + lane] = histograms[split];
+                    plan[(q * 3 + 1) * Lanes + lane] = histograms[split + 1];
+                    plan[(q * 3 + 2) * Lanes + lane] = histograms[split + 2];
+                }
+            }
+
+            for (int q = 0; q < orderingCount; q++)
+            {
+                TrySplit(r, g, b, rg, bl, totalRg, totalB, Vector256.Create<int>(plan.Slice(q * 3 * Lanes, Lanes)),
+                    Vector256.Create<int>(plan.Slice((q * 3 + 1) * Lanes, Lanes)), Vector256.Create<int>(plan.Slice((q * 3 + 2) * Lanes, Lanes)),
+                    active, ref fit, ref fitError);
+            }
+        }
+
+        Span<Vector256<int>> sizes = stackalloc Vector256<int>[4];
+        Vector256<int> group = Vector256<int>.Zero;
+        sizes.Clear();
+        sizes[0] = Vector256<int>.AllBitsSet;
+
+        for (int i = 1; i < 16; i++)
+        {
+            group -= ~(Vector256.Equals(rg[i], rg[i - 1]) & Vector256.Equals(bl[i], bl[i - 1]));
+
+            for (int j = 0; j < 4; j++)
+            {
+                sizes[j] += Vector256.Equals(group, Vector256.Create(j));
+            }
+        }
+
+        Vector256<int> distinct = group + Vector256<int>.One;
+
+        foreach (int[] pattern in BcEncoder.GroupPatterns)
+        {
+            Vector256<int> valid = active & Vector256.Equals(distinct, Vector256.Create(pattern.Length));
+
+            if (valid == Vector256<int>.Zero)
+            {
+                continue;
+            }
+
+            Vector256<int> h0 = Vector256<int>.Zero, h1 = Vector256<int>.Zero, h2 = Vector256<int>.Zero;
+
+            for (int j = 0; j < pattern.Length; j++)
+            {
+                switch (pattern[j])
+                {
+                    case 0: h0 -= sizes[j]; break;
+                    case 1: h1 -= sizes[j]; break;
+                    case 2: h2 -= sizes[j]; break;
+                }
+            }
+
+            TrySplit(r, g, b, rg, bl, totalRg, totalB, h0, h1, h2, valid, ref fit, ref fitError);
+        }
+
+        Vector256<int> accept = active & Vector256.LessThan(fitError, bestError);
+        Select(accept, ref best, fit);
+        bestError = Vector256.ConditionalSelect(accept, fitError, bestError);
+        return accept;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void TrySplit(ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g, ReadOnlySpan<Vector256<int>> b,
+        ReadOnlySpan<Vector256<int>> rg, ReadOnlySpan<Vector256<int>> bl, Vector256<int> totalRg, Vector256<int> totalB,
+        Vector256<int> h0, Vector256<int> h1, Vector256<int> h2, Vector256<int> valid, ref Endpoints fit, ref Vector256<int> fitError)
+    {
+        Vector256<int> h3 = Vector256.Create(16) - h0 - h1 - h2;
+        Vector256<int> f1 = h0, f2 = h0 + h1, f3 = f2 + h2;
+        Vector256<int> p1Rg = Vector256<int>.Zero, p2Rg = Vector256<int>.Zero, p3Rg = Vector256<int>.Zero;
+        Vector256<int> p1B = Vector256<int>.Zero, p2B = Vector256<int>.Zero, p3B = Vector256<int>.Zero;
+
+        for (int i = 0; i < 16; i++)
+        {
+            Vector256<int> position = Vector256.Create(i);
+            Vector256<int> in1 = Vector256.GreaterThan(f1, position);
+            Vector256<int> in2 = Vector256.GreaterThan(f2, position);
+            Vector256<int> in3 = Vector256.GreaterThan(f3, position);
+            p1Rg += rg[i] & in1;
+            p2Rg += rg[i] & in2;
+            p3Rg += rg[i] & in3;
+            p1B += bl[i] & in1;
+            p2B += bl[i] & in2;
+            p3B += bl[i] & in3;
+        }
+
+        Vector256<int> a2 = Vector256.Create(9) * h0 + Vector256.Create(4) * h1 + h2;
+        Vector256<int> b2 = h1 + Vector256.Create(4) * h2 + Vector256.Create(9) * h3;
+        Vector256<int> ab = Vector256.Create(2) * (h1 + h2);
+        Vector256<int> detInt = a2 * b2 - ab * ab;
+        Vector256<float> det = Vector256.ConvertToSingle(detInt);
+        Vector256<int> low = Vector256.Create(0xFFFF);
+        valid &= ~Vector256.Equals(detInt, Vector256<int>.Zero);
+
+        if (valid == Vector256<int>.Zero)
+        {
+            return;
+        }
+
+        Endpoints trial;
+        (trial.R0, trial.R1) = FitChannel(p1Rg & low, p2Rg & low, p3Rg & low, totalRg & low, a2, b2, ab, det, 5);
+        (trial.G0, trial.G1) = FitChannel(p1Rg >>> 16, p2Rg >>> 16, p3Rg >>> 16, totalRg >>> 16, a2, b2, ab, det, 6);
+        (trial.B0, trial.B1) = FitChannel(p1B, p2B, p3B, totalB, a2, b2, ab, det, 5);
+        Vector256<int> error = MatchFourColorError(r, g, b, trial);
+        Vector256<int> better = valid & Vector256.LessThan(error, fitError);
+
+        if (better == Vector256<int>.Zero)
+        {
+            return;
+        }
+
+        Select(better, ref fit, trial);
+        fitError = Vector256.ConditionalSelect(better, error, fitError);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static (Vector256<int>, Vector256<int>) FitChannel(Vector256<int> p1, Vector256<int> p2, Vector256<int> p3, Vector256<int> total,
+        Vector256<int> a2, Vector256<int> b2, Vector256<int> ab, Vector256<float> det, int bits)
+    {
+        Vector256<int> two = Vector256.Create(2), three = Vector256.Create(3);
+        Vector256<int> ax = three * p1 + two * (p2 - p1) + (p3 - p2);
+        Vector256<int> bx = (p2 - p1) + two * (p3 - p2) + three * (total - p3);
+        Vector256<float> n0 = Vector256.ConvertToSingle(three * (ax * b2 - bx * ab));
+        Vector256<float> n1 = Vector256.ConvertToSingle(three * (bx * a2 - ax * ab));
+        Vector256<int> c0 = Clamp255(Vector256.ConvertToInt32(Vector256.Round(n0 / det)));
+        Vector256<int> c1 = Clamp255(Vector256.ConvertToInt32(Vector256.Round(n1 / det)));
+        return bits == 6 ? (Expand6(Quantize(c0, 6)), Expand6(Quantize(c1, 6))) : (Expand5(Quantize(c0, 5)), Expand5(Quantize(c1, 5)));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void SearchColorEndpoints(ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g, ReadOnlySpan<Vector256<int>> b,
+        ref Endpoints best, ref Vector256<int> error)
+    {
         for (int round = 0; round < BcEncoder.EndpointSearchRounds; round++)
         {
             Vector256<int> improved = Vector256<int>.Zero;
@@ -230,7 +428,7 @@ internal static class BcEncoderSimd
 
                     Endpoints trial = best;
                     Set(ref trial, e, bits == 6 ? Expand6(level) : Expand5(level));
-                    Vector256<int> trialError = MatchFourColor(r, g, b, trial, trialIndices);
+                    Vector256<int> trialError = MatchFourColorError(r, g, b, trial);
                     Vector256<int> accept = valid & Vector256.LessThan(trialError, error);
 
                     if (accept == Vector256<int>.Zero)
@@ -240,12 +438,6 @@ internal static class BcEncoderSimd
 
                     Select(accept, ref best, trial);
                     error = Vector256.ConditionalSelect(accept, trialError, error);
-
-                    for (int i = 0; i < 16; i++)
-                    {
-                        indices[i] = Vector256.ConditionalSelect(accept, trialIndices[i], indices[i]);
-                    }
-
                     improved |= accept;
                 }
             }
@@ -498,6 +690,26 @@ internal static class BcEncoderSimd
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<int> MatchFourColorError(ReadOnlySpan<Vector256<int>> r, ReadOnlySpan<Vector256<int>> g, ReadOnlySpan<Vector256<int>> b,
+        in Endpoints e)
+    {
+        Vector256<int> two = Vector256.Create(2);
+        Vector256<int> p2r = Divide3(two * e.R0 + e.R1), p2g = Divide3(two * e.G0 + e.G1), p2b = Divide3(two * e.B0 + e.B1);
+        Vector256<int> p3r = Divide3(e.R0 + two * e.R1), p3g = Divide3(e.G0 + two * e.G1), p3b = Divide3(e.B0 + two * e.B1);
+        Vector256<int> total = Vector256<int>.Zero;
+
+        for (int i = 0; i < 16; i++)
+        {
+            Vector256<int> nearest = Vector256.Min(
+                Vector256.Min(Distance(r[i], g[i], b[i], e.R0, e.G0, e.B0), Distance(r[i], g[i], b[i], e.R1, e.G1, e.B1)),
+                Vector256.Min(Distance(r[i], g[i], b[i], p2r, p2g, p2b), Distance(r[i], g[i], b[i], p3r, p3g, p3b)));
+            total += nearest;
+        }
+
+        return total;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector256<int> Distance(Vector256<int> r, Vector256<int> g, Vector256<int> b, Vector256<int> pr, Vector256<int> pg, Vector256<int> pb)
     {
         Vector256<int> dr = r - pr, dg = g - pg, db = b - pb;
@@ -577,7 +789,8 @@ internal static class BcEncoderSimd
 
         Span<Vector256<int>> palette = stackalloc Vector256<int>[8];
         Span<Vector256<int>> indices = stackalloc Vector256<int>[16];
-        Span<Vector256<int>> altIndices = stackalloc Vector256<int>[16];
+        Span<Vector256<int>> pairs = stackalloc Vector256<int>[8];
+        PackPairs(values, pairs);
 
         Vector256<int> a0 = max, a1 = min;
         palette[0] = max;
@@ -588,7 +801,7 @@ internal static class BcEncoderSimd
             palette[1 + i] = Divide7(Vector256.Create(7 - i) * max + Vector256.Create(i) * min + Vector256.Create(3));
         }
 
-        Vector256<int> error = MatchSingleChannel(values, palette, indices);
+        Vector256<int> error = MatchError(pairs, palette);
 
         Vector256<int> hasInner = Vector256.LessThanOrEqual(innerMin, innerMax);
         Vector256<int> lo = Vector256.ConditionalSelect(hasInner, innerMin, min);
@@ -603,19 +816,17 @@ internal static class BcEncoderSimd
 
         palette[6] = zero;
         palette[7] = full;
-        Vector256<int> altError = MatchSingleChannel(values, palette, altIndices);
+        Vector256<int> altError = MatchError(pairs, palette);
 
         Vector256<int> useAlt = (Vector256.Equals(min, zero) | Vector256.Equals(max, full)) & Vector256.LessThan(altError, error);
         a0 = Vector256.ConditionalSelect(useAlt, lo, a0);
         a1 = Vector256.ConditionalSelect(useAlt, hi, a1);
         error = Vector256.ConditionalSelect(useAlt, altError, error);
 
-        for (int i = 0; i < 16; i++)
-        {
-            indices[i] = Vector256.ConditionalSelect(useAlt, altIndices[i], indices[i]);
-        }
-
-        SearchAlphaEndpoints(values, ref a0, ref a1, indices, error);
+        SearchAlphaEndpoints(pairs, ref a0, ref a1, ref error);
+        SearchAlphaRange(pairs, ref a0, ref a1, ref error);
+        BuildAlphaPalette(a0, a1, Vector256.GreaterThan(a0, a1), palette);
+        MatchSingleChannel(values, palette, indices);
 
         Vector256<int> low = zero, high = zero;
 
@@ -651,16 +862,14 @@ internal static class BcEncoderSimd
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    private static void SearchAlphaEndpoints(ReadOnlySpan<Vector256<int>> values, ref Vector256<int> a0, ref Vector256<int> a1,
-        Span<Vector256<int>> indices, Vector256<int> error)
+    private static void SearchAlphaEndpoints(ReadOnlySpan<Vector256<int>> pairs, ref Vector256<int> a0, ref Vector256<int> a1, ref Vector256<int> error)
     {
         Span<Vector256<int>> palette = stackalloc Vector256<int>[8];
-        Span<Vector256<int>> trialIndices = stackalloc Vector256<int>[16];
         Vector256<int> zero = Vector256<int>.Zero;
         Vector256<int> full = Vector256.Create(255);
         Vector256<int> eightValues = Vector256.GreaterThan(a0, a1);
 
-        for (int round = 0; round < BcEncoder.EndpointSearchRounds; round++)
+        for (int round = 0; round < BcEncoder.EndpointSearchRounds && error != zero; round++)
         {
             Vector256<int> improved = zero;
 
@@ -674,21 +883,8 @@ internal static class BcEncoderSimd
                         & Vector256.GreaterThanOrEqual(t1, zero) & Vector256.LessThanOrEqual(t1, full)
                         & ~(Vector256.GreaterThan(t0, t1) ^ eightValues);
 
-                    Vector256<int> c0 = Vector256.Min(Vector256.Max(t0, zero), full);
-                    Vector256<int> c1 = Vector256.Min(Vector256.Max(t1, zero), full);
-                    palette[0] = c0;
-                    palette[1] = c1;
-
-                    for (int i = 1; i < 7; i++)
-                    {
-                        Vector256<int> eight = Divide7(Vector256.Create(7 - i) * c0 + Vector256.Create(i) * c1 + Vector256.Create(3));
-                        Vector256<int> six = i < 5
-                            ? Divide5(Vector256.Create(5 - i) * c0 + Vector256.Create(i) * c1 + Vector256.Create(2))
-                            : (i == 5 ? zero : full);
-                        palette[1 + i] = Vector256.ConditionalSelect(eightValues, eight, six);
-                    }
-
-                    Vector256<int> trialError = MatchSingleChannel(values, palette, trialIndices);
+                    BuildAlphaPalette(t0, t1, eightValues, palette);
+                    Vector256<int> trialError = MatchError(pairs, palette);
                     Vector256<int> accept = valid & Vector256.LessThan(trialError, error);
 
                     if (accept == zero)
@@ -700,11 +896,6 @@ internal static class BcEncoderSimd
                     a1 = Vector256.ConditionalSelect(accept, t1, a1);
                     error = Vector256.ConditionalSelect(accept, trialError, error);
 
-                    for (int i = 0; i < 16; i++)
-                    {
-                        indices[i] = Vector256.ConditionalSelect(accept, trialIndices[i], indices[i]);
-                    }
-
                     improved |= accept;
                 }
             }
@@ -713,6 +904,116 @@ internal static class BcEncoderSimd
             {
                 break;
             }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void SearchAlphaRange(ReadOnlySpan<Vector256<int>> pairs, ref Vector256<int> a0, ref Vector256<int> a1, ref Vector256<int> error)
+    {
+        Span<Vector256<int>> palette = stackalloc Vector256<int>[8];
+        Vector256<int> zero = Vector256<int>.Zero;
+        Vector256<int> full = Vector256.Create(255);
+        Vector256<int> eightValues = Vector256.GreaterThan(a0, a1);
+
+        for (int step = BcEncoder.AlphaSearchStep; step >= 1; step >>= 1)
+        {
+            for (int round = 0; round < BcEncoder.AlphaSearchRounds && error != zero; round++)
+            {
+                Vector256<int> improved = zero;
+
+                for (int d0 = -step; d0 <= step; d0 += step)
+                {
+                    for (int d1 = -step; d1 <= step; d1 += step)
+                    {
+                        if (d0 == 0 && d1 == 0)
+                        {
+                            continue;
+                        }
+
+                        Vector256<int> t0 = a0 + Vector256.Create(d0);
+                        Vector256<int> t1 = a1 + Vector256.Create(d1);
+                        Vector256<int> valid = Vector256.GreaterThanOrEqual(t0, zero) & Vector256.LessThanOrEqual(t0, full)
+                            & Vector256.GreaterThanOrEqual(t1, zero) & Vector256.LessThanOrEqual(t1, full)
+                            & ~(Vector256.GreaterThan(t0, t1) ^ eightValues);
+
+                        if (valid == zero)
+                        {
+                            continue;
+                        }
+
+                        BuildAlphaPalette(t0, t1, eightValues, palette);
+                        Vector256<int> trialError = MatchError(pairs, palette);
+                        Vector256<int> accept = valid & Vector256.LessThan(trialError, error);
+
+                        if (accept == zero)
+                        {
+                            continue;
+                        }
+
+                        a0 = Vector256.ConditionalSelect(accept, t0, a0);
+                        a1 = Vector256.ConditionalSelect(accept, t1, a1);
+                        error = Vector256.ConditionalSelect(accept, trialError, error);
+
+                        improved |= accept;
+                    }
+                }
+
+                if (improved == zero)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void BuildAlphaPalette(Vector256<int> t0, Vector256<int> t1, Vector256<int> eightValues, Span<Vector256<int>> palette)
+    {
+        Vector256<int> zero = Vector256<int>.Zero;
+        Vector256<int> full = Vector256.Create(255);
+        Vector256<int> c0 = Vector256.Min(Vector256.Max(t0, zero), full);
+        Vector256<int> c1 = Vector256.Min(Vector256.Max(t1, zero), full);
+        Vector256<int> diff = c1 - c0;
+        palette[0] = c0;
+        palette[1] = c1;
+
+        if (eightValues == Vector256<int>.AllBitsSet)
+        {
+            Vector256<int> eight = Vector256.Create(7) * c0 + Vector256.Create(3);
+
+            for (int i = 1; i < 7; i++)
+            {
+                eight += diff;
+                palette[1 + i] = Divide7(eight);
+            }
+
+            return;
+        }
+
+        if (eightValues == zero)
+        {
+            Vector256<int> six = Vector256.Create(5) * c0 + Vector256.Create(2);
+
+            for (int i = 1; i < 5; i++)
+            {
+                six += diff;
+                palette[1 + i] = Divide5(six);
+            }
+
+            palette[6] = zero;
+            palette[7] = full;
+            return;
+        }
+
+        Vector256<int> sevenths = Vector256.Create(7) * c0 + Vector256.Create(3);
+        Vector256<int> fifths = Vector256.Create(5) * c0 + Vector256.Create(2);
+
+        for (int i = 1; i < 7; i++)
+        {
+            sevenths += diff;
+            fifths += diff;
+            Vector256<int> six = i < 5 ? Divide5(fifths) : (i == 5 ? zero : full);
+            palette[1 + i] = Vector256.ConditionalSelect(eightValues, Divide7(sevenths), six);
         }
     }
 
@@ -726,6 +1027,43 @@ internal static class BcEncoderSimd
     private static Vector256<int> Divide5(Vector256<int> x)
     {
         return (x * Vector256.Create(13108)) >>> 16;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<int> MatchError(ReadOnlySpan<Vector256<int>> pairs, ReadOnlySpan<Vector256<int>> palette)
+    {
+        Vector256<short> p0 = Duplicate(palette[0]), p1 = Duplicate(palette[1]), p2 = Duplicate(palette[2]), p3 = Duplicate(palette[3]);
+        Vector256<short> p4 = Duplicate(palette[4]), p5 = Duplicate(palette[5]), p6 = Duplicate(palette[6]), p7 = Duplicate(palette[7]);
+        Vector256<int> total = Vector256<int>.Zero;
+        Vector256<int> low = Vector256.Create(0xFFFF);
+
+        for (int i = 0; i < 8; i++)
+        {
+            Vector256<short> v = pairs[i].AsInt16();
+            Vector256<short> nearest = Vector256.Min(Vector256.Min(Vector256.Min(Vector256.Abs(v - p0), Vector256.Abs(v - p1)),
+                Vector256.Min(Vector256.Abs(v - p2), Vector256.Abs(v - p3))),
+                Vector256.Min(Vector256.Min(Vector256.Abs(v - p4), Vector256.Abs(v - p5)),
+                Vector256.Min(Vector256.Abs(v - p6), Vector256.Abs(v - p7))));
+            Vector256<int> squares = (nearest * nearest).AsInt32();
+            total += (squares & low) + (squares >>> 16);
+        }
+
+        return total;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<short> Duplicate(Vector256<int> value)
+    {
+        return (value | (value << 16)).AsInt16();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void PackPairs(ReadOnlySpan<Vector256<int>> values, Span<Vector256<int>> pairs)
+    {
+        for (int i = 0; i < 8; i++)
+        {
+            pairs[i] = values[i] | (values[i + 8] << 16);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]

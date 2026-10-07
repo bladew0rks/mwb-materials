@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "mwb-materials", "mwb-materi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VtfNet", "VtfNet\VtfNet.csproj", "{A41B4EFB-6E61-4B4E-8931-68A616C4E5DE}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpBcn", "SharpBcn\SharpBcn.csproj", "{9C2013A4-AE84-489D-B673-AEF3168E7069}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -41,6 +43,18 @@ Global
 		{A41B4EFB-6E61-4B4E-8931-68A616C4E5DE}.Release|x64.Build.0 = Release|Any CPU
 		{A41B4EFB-6E61-4B4E-8931-68A616C4E5DE}.Release|x86.ActiveCfg = Release|Any CPU
 		{A41B4EFB-6E61-4B4E-8931-68A616C4E5DE}.Release|x86.Build.0 = Release|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Debug|x64.Build.0 = Debug|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Debug|x86.Build.0 = Debug|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Release|x64.ActiveCfg = Release|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Release|x64.Build.0 = Release|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Release|x86.ActiveCfg = Release|Any CPU
+		{9C2013A4-AE84-489D-B673-AEF3168E7069}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

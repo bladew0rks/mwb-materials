@@ -1,5 +1,5 @@
 using System.Buffers.Binary;
-using VtfNet.Compression;
+using SharpBcn;
 
 namespace VtfNet;
 
@@ -183,7 +183,15 @@ public static class PixelFormatConverter
             case VtfImageFormat.ATI1N:
             case VtfImageFormat.ATI2N:
             case VtfImageFormat.DXT1OneBitAlpha:
-                BcEncoder.Encode(format, rgba, width, height, output, outputOffset, alphaThreshold);
+                BcEncoder.Encode(format switch
+                {
+                    VtfImageFormat.DXT1 => BcFormat.Bc1,
+                    VtfImageFormat.DXT1OneBitAlpha => BcFormat.Bc1Alpha,
+                    VtfImageFormat.DXT3 => BcFormat.Bc2,
+                    VtfImageFormat.DXT5 => BcFormat.Bc3,
+                    VtfImageFormat.ATI1N => BcFormat.Bc4,
+                    _ => BcFormat.Bc5,
+                }, rgba, width, height, output.AsSpan(outputOffset), alphaThreshold);
                 return;
         }
 
