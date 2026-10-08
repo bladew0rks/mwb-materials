@@ -886,20 +886,30 @@ public sealed class VtfFile
         if (SupportsResources)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(h[68..], (uint)entries.Count);
+            var dataOrder = entries
+                .Select((entry, index) => (Entry: entry, Index: index))
+                .OrderBy(item => item.Entry.Type == LowResImageResource ? 0 : item.Entry.Type == ImageResource ? 2 : 1)
+                .ToList();
             uint offset = (uint)headerSize;
 
             for (int i = 0; i < entries.Count; i++)
             {
-                var entry = entries[i];
-                BinaryPrimitives.WriteUInt32LittleEndian(h[(80 + i * 8)..], entry.Type);
+                BinaryPrimitives.WriteUInt32LittleEndian(h[(80 + i * 8)..], entries[i].Type);
 
+                if (entries[i].Chunk == null)
+                {
+                    BinaryPrimitives.WriteUInt32LittleEndian(h[(84 + i * 8)..], entries[i].Inline);
+                }
+            }
+
+            foreach (var (entry, index) in dataOrder)
+            {
                 if (entry.Chunk == null)
                 {
-                    BinaryPrimitives.WriteUInt32LittleEndian(h[(84 + i * 8)..], entry.Inline);
                     continue;
                 }
 
-                BinaryPrimitives.WriteUInt32LittleEndian(h[(84 + i * 8)..], offset);
+                BinaryPrimitives.WriteUInt32LittleEndian(h[(84 + index * 8)..], offset);
                 bool rawImage = entry.Type == LowResImageResource || entry.Type == ImageResource;
                 offset += (uint)entry.Chunk.Length + (rawImage ? 0u : 4u);
             }
@@ -907,7 +917,7 @@ public sealed class VtfFile
             stream.Write(header);
             Span<byte> length = stackalloc byte[4];
 
-            foreach (var entry in entries)
+            foreach (var (entry, _) in dataOrder)
             {
                 if (entry.Chunk == null)
                 {
