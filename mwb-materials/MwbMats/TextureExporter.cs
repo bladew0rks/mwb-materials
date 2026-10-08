@@ -11,8 +11,9 @@ namespace mwb_materials.MwbMats
         public static readonly string FormatDXT5 = "DXT5";
         public static readonly string FormatRGBA8888 = "RGBA8888";
         public static readonly string FormatBC7 = "BC7";
+        public static readonly string FormatBC6H = "BC6H";
 
-        public static readonly string[] Formats = new string[] { FormatDXT5, FormatRGBA8888, FormatDXT1, FormatBC7 };
+        public static readonly string[] Formats = new string[] { FormatDXT5, FormatRGBA8888, FormatDXT1, FormatBC7, FormatBC6H };
 
         private static readonly ConcurrentDictionary<string, object> PathLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
 
@@ -31,6 +32,11 @@ namespace mwb_materials.MwbMats
             if (string.Equals(format, FormatBC7, StringComparison.OrdinalIgnoreCase))
             {
                 return VtfImageFormat.BC7;
+            }
+
+            if (string.Equals(format, FormatBC6H, StringComparison.OrdinalIgnoreCase))
+            {
+                return VtfImageFormat.BC6HUnsigned;
             }
 
             return VtfImageFormat.DXT5;

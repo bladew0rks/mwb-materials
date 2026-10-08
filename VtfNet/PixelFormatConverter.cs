@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using SharpBcn;
 
 namespace VtfNet;
@@ -99,6 +100,10 @@ public static class PixelFormatConverter
                 return BcDecoder.DecodeBc5(data, width, height);
             case VtfImageFormat.BC7:
                 return BcDecoder.DecodeBc7(data, width, height);
+            case VtfImageFormat.BC6HSigned:
+            case VtfImageFormat.BC6HUnsigned:
+                Half[] hdr = BcDecoder.DecodeBc6h(data, width, height, format == VtfImageFormat.BC6HSigned);
+                return DecodeHighPrecision(MemoryMarshal.AsBytes(hdr.AsSpan()), width, height, VtfImageFormat.RGBA16161616F);
             case VtfImageFormat.RGBA16161616F:
             case VtfImageFormat.RGBA16161616:
             case VtfImageFormat.R32F:
@@ -196,6 +201,18 @@ public static class PixelFormatConverter
                     VtfImageFormat.BC7 => BcFormat.Bc7,
                     _ => BcFormat.Bc5,
                 }, rgba, width, height, output.AsSpan(outputOffset), alphaThreshold);
+                return;
+            case VtfImageFormat.BC6HSigned:
+            case VtfImageFormat.BC6HUnsigned:
+                Half[] halves = new Half[width * height * 4];
+
+                for (int i = 0; i < halves.Length; i++)
+                {
+                    halves[i] = (i & 3) == 3 ? Half.One : (Half)(rgba[i] / 255f);
+                }
+
+                BcEncoder.Encode(format == VtfImageFormat.BC6HSigned ? BcFormat.Bc6hSigned : BcFormat.Bc6hUnsigned,
+                    MemoryMarshal.AsBytes(halves.AsSpan()), width, height, output.AsSpan(outputOffset));
                 return;
         }
 

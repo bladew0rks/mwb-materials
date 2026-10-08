@@ -44,6 +44,8 @@ public enum VtfImageFormat
     ATI2N,
     HdrBGRA8888,
     BC7 = 70,
+    BC6HSigned = 71,
+    BC6HUnsigned = 72,
 }
 
 public sealed record VtfImageFormatInfo(
@@ -103,12 +105,21 @@ public sealed record VtfImageFormatInfo(
     ];
 
     private static readonly VtfImageFormatInfo Bc7 = new("BC7", 8, 0, 0, 0, 0, 8, true, true, true);
+    private static readonly VtfImageFormatInfo Bc6hSigned = new("BC6H Signed", 8, 0, 16, 16, 16, 0, true, true, true);
+    private static readonly VtfImageFormatInfo Bc6hUnsigned = new("BC6H Unsigned", 8, 0, 16, 16, 16, 0, true, true, true);
+
+    public static bool IsStrataFormat(VtfImageFormat format) => format is VtfImageFormat.BC7 or VtfImageFormat.BC6HSigned or VtfImageFormat.BC6HUnsigned;
 
     public static VtfImageFormatInfo Get(VtfImageFormat format)
     {
-        if (format == VtfImageFormat.BC7)
+        switch (format)
         {
-            return Bc7;
+            case VtfImageFormat.BC7:
+                return Bc7;
+            case VtfImageFormat.BC6HSigned:
+                return Bc6hSigned;
+            case VtfImageFormat.BC6HUnsigned:
+                return Bc6hUnsigned;
         }
 
         int index = (int)format;

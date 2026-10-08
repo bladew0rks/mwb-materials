@@ -237,7 +237,7 @@ public sealed class VtfFile
         VtfFile file = new VtfFile
         {
             MajorVersion = options.MajorVersion,
-            MinorVersion = storedFormat == VtfImageFormat.BC7 ? Math.Max(options.MinorVersion, 6) : options.MinorVersion,
+            MinorVersion = VtfImageFormatInfo.IsStrataFormat(storedFormat) ? Math.Max(options.MinorVersion, 6) : options.MinorVersion,
             Width = width,
             Height = height,
             Depth = 1,
@@ -553,7 +553,7 @@ public sealed class VtfFile
             throw new InvalidDataException("VTF has zero width or height.");
         }
 
-        if (file.Format < VtfImageFormat.None || ((int)file.Format > (int)VtfImageFormat.HdrBGRA8888 && file.Format != VtfImageFormat.BC7))
+        if (file.Format < VtfImageFormat.None || ((int)file.Format > (int)VtfImageFormat.HdrBGRA8888 && !VtfImageFormatInfo.IsStrataFormat(file.Format)))
         {
             throw new InvalidDataException("Unknown VTF image format " + (int)file.Format + ".");
         }
