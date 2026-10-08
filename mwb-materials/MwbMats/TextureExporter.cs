@@ -10,12 +10,27 @@ namespace mwb_materials.MwbMats
         public static readonly string FormatDXT1 = "DXT1";
         public static readonly string FormatDXT5 = "DXT5";
         public static readonly string FormatRGBA8888 = "RGBA8888";
-        public static readonly string FormatBC7 = "BC7";
-        public static readonly string FormatBC6H = "BC6H";
+        public static readonly string FormatBC7 = "BC7 (DX11 GMod)";
+        public static readonly string FormatBC6H = "BC6H (DX11 GMod)";
 
         public static readonly string[] Formats = new string[] { FormatDXT5, FormatRGBA8888, FormatDXT1, FormatBC7, FormatBC6H };
 
         private static readonly ConcurrentDictionary<string, object> PathLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
+
+        public static string GetFormatName(string format)
+        {
+            VtfImageFormat parsed = ParseFormat(format);
+
+            foreach (string name in Formats)
+            {
+                if (ParseFormat(name) == parsed)
+                {
+                    return name;
+                }
+            }
+
+            return FormatDXT5;
+        }
 
         public static VtfImageFormat ParseFormat(string format)
         {
@@ -29,12 +44,12 @@ namespace mwb_materials.MwbMats
                 return VtfImageFormat.RGBA8888;
             }
 
-            if (string.Equals(format, FormatBC7, StringComparison.OrdinalIgnoreCase))
+            if (format != null && format.StartsWith("BC7", StringComparison.OrdinalIgnoreCase))
             {
                 return VtfImageFormat.BC7;
             }
 
-            if (string.Equals(format, FormatBC6H, StringComparison.OrdinalIgnoreCase))
+            if (format != null && format.StartsWith("BC6H", StringComparison.OrdinalIgnoreCase))
             {
                 return VtfImageFormat.BC6HUnsigned;
             }

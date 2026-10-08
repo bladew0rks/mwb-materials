@@ -112,9 +112,9 @@ namespace mwb_materials
                 NormalMipMapsCheck.IsChecked = source.NormalMipMaps;
                 ExponentMipMapsCheck.IsChecked = source.ExponentMipMaps;
 
-                SetComboBoxValue(AlbedoCompression, source.AlbedoCompression, TextureExporter.FormatDXT5);
-                SetComboBoxValue(NormalCompression, source.NormalCompression, TextureExporter.FormatRGBA8888);
-                SetComboBoxValue(ExponentCompression, source.ExponentCompression, TextureExporter.FormatDXT5);
+                SetComboBoxValue(AlbedoCompression, TextureExporter.GetFormatName(source.AlbedoCompression ?? TextureExporter.FormatDXT5), TextureExporter.FormatDXT5);
+                SetComboBoxValue(NormalCompression, TextureExporter.GetFormatName(source.NormalCompression ?? TextureExporter.FormatRGBA8888), TextureExporter.FormatRGBA8888);
+                SetComboBoxValue(ExponentCompression, TextureExporter.GetFormatName(source.ExponentCompression ?? TextureExporter.FormatDXT5), TextureExporter.FormatDXT5);
                 SetComboBoxValue(ClampComboBox, source.ClampSize, "4096");
                 SetPresetComboBoxValue(source.VmtPreset);
 
