@@ -35,6 +35,7 @@ namespace mwb_materials
         private static readonly string MetalnessAltNomenclature = "_m";
         private static readonly string NormalNomenclature = "_n";
         private static readonly string EmissiveNomenclature = "_e";
+        private static readonly string SpecularNomenclature = "_spec";
         private static readonly string AlphatestNomenclature = "_t";
         private static readonly string TranslucentNomenclature = "_opacity";
         private static readonly string PackedOrmNomenclature = "_orm";
@@ -374,6 +375,71 @@ namespace mwb_materials
             });
 
             return sourceExponent;
+        }
+
+        private const double DielectricSpecular = 0.04;
+
+        private static readonly double[] SrgbToLinearLut = Enumerable.Range(0, 256)
+            .Select(value => value / 255.0 <= 0.04045 ? value / 255.0 / 12.92 : Math.Pow((value / 255.0 + 0.055) / 1.055, 2.4))
+            .ToArray();
+
+        private static byte LinearToSrgb(double value)
+        {
+            value = Math.Clamp(value, 0.0, 1.0);
+            double encoded = value <= 0.0031308 ? value * 12.92 : 1.055 * Math.Pow(value, 1.0 / 2.4) - 0.055;
+            return (byte)Math.Round(encoded * 255.0);
+        }
+
+        private static double PerceivedBrightness(double r, double g, double b)
+        {
+            return Math.Sqrt(0.299 * r * r + 0.587 * g * g + 0.114 * b * b);
+        }
+
+        //specular/glossiness -> metallic/roughness, following the Khronos glTF conversion (KHR_materials_pbrSpecularGlossiness)
+        private static double SolveMetallic(double diffuse, double specular, double oneMinusSpecularStrength)
+        {
+            if (specular < DielectricSpecular)
+            {
+                return 0.0;
+            }
+
+            double a = DielectricSpecular;
+            double b = diffuse * oneMinusSpecularStrength / (1.0 - DielectricSpecular) + specular - 2.0 * DielectricSpecular;
+            double c = DielectricSpecular - specular;
+            double discriminant = Math.Max(b * b - 4.0 * a * c, 0.0);
+            return Math.Clamp((-b + Math.Sqrt(discriminant)) / (2.0 * a), 0.0, 1.0);
+        }
+
+        private static GrayBuffer ConvertSpecularToMetalness(PixelBuffer albedo, PixelBuffer specular)
+        {
+            GrayBuffer metalness = new GrayBuffer(albedo.Width, albedo.Height);
+            byte[] color = albedo.Bytes;
+            byte[] spec = specular.Bytes;
+            byte[] metal = metalness.Bytes;
+
+            ParallelPixels.For(albedo.PixelCount, (start, end) =>
+            {
+                for (int i = start; i < end; i++)
+                {
+                    int o = i * 4;
+                    double dr = SrgbToLinearLut[color[o]], dg = SrgbToLinearLut[color[o + 1]], db = SrgbToLinearLut[color[o + 2]];
+                    double sr = SrgbToLinearLut[spec[o]], sg = SrgbToLinearLut[spec[o + 1]], sb = SrgbToLinearLut[spec[o + 2]];
+                    double oneMinusSpecularStrength = 1.0 - Math.Max(sr, Math.Max(sg, sb));
+                    double m = SolveMetallic(PerceivedBrightness(dr, dg, db), PerceivedBrightness(sr, sg, sb), oneMinusSpecularStrength);
+                    double fromDiffuse = oneMinusSpecularStrength / (1.0 - DielectricSpecular) / Math.Max(1.0 - m, 1e-6);
+                    double fromSpecular = 1.0 / Math.Max(m, 1e-6);
+                    double blend = m * m;
+
+                    double Base(double d, double s) => d * fromDiffuse * (1.0 - blend) + (s - DielectricSpecular * (1.0 - m)) * fromSpecular * blend;
+
+                    color[o] = LinearToSrgb(Base(dr, sr));
+                    color[o + 1] = LinearToSrgb(Base(dg, sg));
+                    color[o + 2] = LinearToSrgb(Base(db, sb));
+                    metal[i] = (byte)Math.Round(m * 255.0);
+                }
+            });
+
+            return metalness;
         }
 
         private static PixelBuffer CreateSurfaceGgxMask(GrayBuffer gloss, GrayBuffer metalness)
@@ -780,6 +846,7 @@ namespace mwb_materials
             Metalness,
             Normal,
             Emissive,
+            Specular,
             Alphatest,
             Translucent
         }
@@ -799,6 +866,11 @@ namespace mwb_materials
             if (IsRgbmTextureName(name))
             {
                 return SourceRole.Rgbm;
+            }
+
+            if (name.EndsWith(SpecularNomenclature))
+            {
+                return SourceRole.Specular;
             }
 
             if (name.EndsWith(AlbedoNomenclature) || name.EndsWith(AlbedoAltNomenclature))
@@ -931,6 +1003,7 @@ namespace mwb_materials
             PixelBuffer albedo = null;
             PixelBuffer normal = null;
             PixelBuffer emissive = null;
+            PixelBuffer specular = null;
             GrayBuffer ambientOcclusion = null;
             GrayBuffer roughness = null;
             GrayBuffer gloss = null;
@@ -945,6 +1018,7 @@ namespace mwb_materials
             string metalnessSource = null;
             string normalSource = null;
             string emissiveSource = null;
+            string specularSource = null;
             string alphatestOpacitySource = null;
             string translucentOpacitySource = null;
 
@@ -955,6 +1029,7 @@ namespace mwb_materials
             int metalnessPriority = 0;
             int normalPriority = 0;
             int emissivePriority = 0;
+            int specularPriority = 0;
             int alphatestOpacityPriority = 0;
             int translucentOpacityPriority = 0;
 
@@ -1066,6 +1141,11 @@ namespace mwb_materials
                         Grow(rgba.Width, rgba.Height);
                         TryAssignTexture(ref emissive, ref emissiveSource, ref emissivePriority, rgba, "emissive", fileName, ExplicitPriority, props.LogFunc);
                         break;
+                    case SourceRole.Specular:
+                        LogSourceReport(file, SpecularNomenclature, "RGB=specular color, converted to base color and metalness", source.Stats, props.LogFunc);
+                        Grow(rgba.Width, rgba.Height);
+                        TryAssignTexture(ref specular, ref specularSource, ref specularPriority, rgba, "specular", fileName, ExplicitPriority, props.LogFunc);
+                        break;
                     case SourceRole.Alphatest:
                         LogSourceReport(file, AlphatestNomenclature, "grayscale/RGB=alphatest opacity", source.Stats, props.LogFunc);
                         Grow(gray.Width, gray.Height);
@@ -1082,6 +1162,26 @@ namespace mwb_materials
             if (gloss != null && roughness != null)
             {
                 props.LogFunc?.Invoke("Precedence: gloss using " + glossSource + "; roughness " + roughnessSource + " is ignored because a gloss map is present.");
+            }
+
+            bool convertSpecular = false;
+
+            if (specular != null)
+            {
+                if (albedo == null)
+                {
+                    props.LogFunc?.Invoke("Warning: specular map " + specularSource + " ignored because there is no albedo/diffuse texture to convert.");
+                }
+                else if (metalness != null)
+                {
+                    props.LogFunc?.Invoke("Precedence: metalness using " + metalnessSource + "; specular " + specularSource + " is ignored because a metalness map is present.");
+                }
+                else
+                {
+                    convertSpecular = true;
+                    metalnessSource = "derived from specular(" + specularSource + ")";
+                    albedoSource = "derived from diffuse(" + albedoSource + ") and specular(" + specularSource + ")";
+                }
             }
 
             //resolve opacity mode (prefer alphatest if both are present)
@@ -1135,6 +1235,12 @@ namespace mwb_materials
             ResizeTo(albedo, targetWidth, targetHeight);
             ResizeTo(normal, targetWidth, targetHeight);
             ResizeTo(emissive, targetWidth, targetHeight);
+
+            if (convertSpecular)
+            {
+                ResizeTo(specular, targetWidth, targetHeight);
+                metalness = ConvertSpecularToMetalness(albedo, specular);
+            }
 
             foreach (GrayBuffer mask in new[] { ambientOcclusion, roughness, gloss, metalness, opacity })
             {
