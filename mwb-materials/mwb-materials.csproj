@@ -41,6 +41,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\default_vmt.vmt" LogicalName="default_vmt.vmt" />
+    <EmbeddedResource Include="Resources\surfaceggx_vmt.vmt" LogicalName="surfaceggx_vmt.vmt" />
     <EmbeddedResource Include="envmaps\*.vtf" LogicalName="envmaps.%(Filename)%(Extension)" />
     <Content Include="presets\*.toml;presets\*.toml.example" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>

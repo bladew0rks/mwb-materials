@@ -79,6 +79,16 @@ namespace mwb_materials.MwbMats
             }
 
             VmtPreset preset = new VmtPreset(displayName.Trim(), Path.GetFileName(file), file);
+            string shader = GetString(root, "shader");
+
+            if (string.Equals(shader, VmtPreset.SurfaceGgx, StringComparison.OrdinalIgnoreCase))
+            {
+                preset.Shader = VmtPreset.SurfaceGgx;
+            }
+            else if (!string.IsNullOrWhiteSpace(shader) && !string.Equals(shader, VmtPreset.VertexLitGeneric, StringComparison.OrdinalIgnoreCase))
+            {
+                logFunc?.Invoke("Warning: unknown shader \"" + shader + "\" in " + Path.GetFileName(file) + ", using " + VmtPreset.VertexLitGeneric + ".");
+            }
 
             LoadSection(root, "phong", preset.Phong, file, logFunc);
             LoadSection(root, "rimlight", preset.Rimlight, file, logFunc);

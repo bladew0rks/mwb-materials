@@ -1,0 +1,13 @@
+"SurfaceGGX"
+{
+    "$basetexture" "${ALBEDOPATH}"
+    "$bumpmap" "${NORMALPATH}"
+    "$phongexponenttexture" "${EXPONENTPATH}"
+    "$metal" "${METAL}"
+
+    "$envmap" "env_cubemap"
+
+${OPACITYBLOCK}
+
+${DETAILBLOCK}
+}

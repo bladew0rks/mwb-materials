@@ -1,0 +1,9 @@
+# SurfaceGGX, the PBR shader from Day of Infamy and Insurgency, as found in DX11 Garry's Mod.
+# The tool packs $phongexponenttexture as the GGX mask: red = gloss, green = inverted metalness.
+name = "SurfaceGGX (DX11 GMod)"
+shader = "SurfaceGGX"
+
+# Extra SurfaceGGX parameters go here, for example:
+# [custom]
+# "$roughnessmultiplier" = "1"
+# "$color" = "[1 1 1]"

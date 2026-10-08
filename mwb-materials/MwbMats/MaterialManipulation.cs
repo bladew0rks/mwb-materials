@@ -63,8 +63,10 @@ namespace mwb_materials
 
         public sealed class SourceTextureSet
         {
-            public SourceTextureSet(PixelBuffer albedo, PixelBuffer exponent, PixelBuffer normal, PixelBuffer emissive, Color metallicColor, double averageRoughness, OpacityMode opacityMode, IntermediateTextureSet intermediates)
+            public SourceTextureSet(PixelBuffer albedo, PixelBuffer exponent, PixelBuffer normal, PixelBuffer emissive, Color metallicColor, double averageRoughness, OpacityMode opacityMode,
+                bool hasMetalness, IntermediateTextureSet intermediates)
             {
+                HasMetalness = hasMetalness;
                 Albedo = albedo;
                 Exponent = exponent;
                 Normal = normal;
@@ -82,6 +84,7 @@ namespace mwb_materials
             public Color AverageMetallicColor { get; }
             public double AverageRoughness { get; }
             public OpacityMode OpacityMode { get; }
+            public bool HasMetalness { get; }
             public IntermediateTextureSet Intermediates { get; }
         }
 
@@ -108,6 +111,7 @@ namespace mwb_materials
             public bool bKeepIntermediates { get; set; }
             public int ClampSize { get; set; }
             public float AoAlbedoStrength { get; set; }
+            public bool bSurfaceGgx { get; set; }
             public Action<string> LogFunc { get; set; }
         }
 
@@ -192,14 +196,15 @@ namespace mwb_materials
             byte[] aoTable = ao != null ? BuildAoTable(strength) : null;
 
             //opacity mask -> basetexture alpha (white = opaque, black = transparent)
-            byte[] alphaSource = opacity?.Bytes ?? metalness?.Bytes;
+            byte[] alphaSource = opacity?.Bytes ?? (props.bSurfaceGgx ? null : metalness?.Bytes);
 
             //color2
-            byte[] alphaTable = opacity == null && metalness != null ? Color2Lut : null;
+            byte[] alphaTable = opacity == null && alphaSource != null ? Color2Lut : null;
+            byte emptyAlpha = props.bSurfaceGgx ? (byte)255 : (byte)0;
 
             ParallelPixels.For(albedo.PixelCount, (start, end) =>
             {
-                int i = PixelKernels.CanLookup512 ? ComposeAlbedo512(rgba, ao, strength, alphaSource, alphaTable, start, end) : start;
+                int i = PixelKernels.CanLookup512 ? ComposeAlbedo512(rgba, ao, strength, alphaSource, alphaTable, emptyAlpha, start, end) : start;
 
                 for (; i < end; i++)
                 {
@@ -213,7 +218,7 @@ namespace mwb_materials
                         rgba[o + 2] = aoTable[row | rgba[o + 2]];
                     }
 
-                    rgba[o + 3] = alphaSource == null ? (byte)0 : alphaTable == null ? alphaSource[i] : alphaTable[alphaSource[i]];
+                    rgba[o + 3] = alphaSource == null ? emptyAlpha : alphaTable == null ? alphaSource[i] : alphaTable[alphaSource[i]];
                 }
             });
 
@@ -221,7 +226,7 @@ namespace mwb_materials
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        private static int ComposeAlbedo512(byte[] rgba, byte[] ao, float strength, byte[] alphaSource, byte[] alphaTable, int start, int end)
+        private static int ComposeAlbedo512(byte[] rgba, byte[] ao, float strength, byte[] alphaSource, byte[] alphaTable, byte emptyAlpha, int start, int end)
         {
             PixelKernels.ByteTable table = alphaTable != null ? new PixelKernels.ByteTable(alphaTable) : default;
             Vector512<float> keep = Vector512.Create(1.0f * (1.0f - strength));
@@ -235,7 +240,7 @@ namespace mwb_materials
 
             for (; i + 64 <= end; i += 64)
             {
-                Vector512<byte> alpha = alphaSource == null ? Vector512<byte>.Zero : Vector512.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(alphaSource), (nuint)i);
+                Vector512<byte> alpha = alphaSource == null ? Vector512.Create(emptyAlpha) : Vector512.LoadUnsafe(ref MemoryMarshal.GetArrayDataReference(alphaSource), (nuint)i);
 
                 if (alphaTable != null)
                 {
@@ -369,6 +374,36 @@ namespace mwb_materials
             });
 
             return sourceExponent;
+        }
+
+        private static PixelBuffer CreateSurfaceGgxMask(GrayBuffer gloss, GrayBuffer metalness)
+        {
+            if (gloss == null && metalness == null)
+            {
+                return null;
+            }
+
+            int width = gloss?.Width ?? metalness.Width;
+            int height = gloss?.Height ?? metalness.Height;
+            PixelBuffer mask = new PixelBuffer(width, height);
+            byte[] rgba = mask.Bytes;
+            byte[] glossBytes = gloss?.Bytes;
+            byte[] metal = metalness?.Bytes;
+
+            //red = gloss, green = inverted metalness, blue = subsurface/fuzz mask (unused)
+            ParallelPixels.For(mask.PixelCount, (start, end) =>
+            {
+                for (int i = start; i < end; i++)
+                {
+                    int o = i * 4;
+                    rgba[o] = glossBytes == null ? (byte)128 : glossBytes[i];
+                    rgba[o + 1] = metal == null ? (byte)255 : (byte)(255 - metal[i]);
+                    rgba[o + 2] = 0;
+                    rgba[o + 3] = 255;
+                }
+            });
+
+            return mask;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
@@ -1135,8 +1170,12 @@ namespace mwb_materials
             double averageRoughness = GetAverageRoughness(glossOrRoughness);
 
             Task<PixelBuffer> albedoTask = Task.Run(() => CreateSourceAlbedo(albedo, ambientOcclusion, metalness, opacity, props));
-            Task<PixelBuffer> normalTask = Task.Run(() => CreateSourceNormal(normal, glossOrRoughness, ambientOcclusion, props));
-            Task<PixelBuffer> exponentTask = Task.Run(() => CreateSourceExponent(glossOrRoughness, metalness, ambientOcclusion, props));
+            Task<PixelBuffer> normalTask = props.bSurfaceGgx
+                ? Task.FromResult(normal)
+                : Task.Run(() => CreateSourceNormal(normal, glossOrRoughness, ambientOcclusion, props));
+            Task<PixelBuffer> exponentTask = props.bSurfaceGgx
+                ? Task.Run(() => CreateSurfaceGgxMask(glossOrRoughness, metalness))
+                : Task.Run(() => CreateSourceExponent(glossOrRoughness, metalness, ambientOcclusion, props));
 
             await Task.WhenAll(albedoTask, normalTask, exponentTask);
             props.LogFunc?.Invoke("Timing: decode " + decodeMs + " ms, split " + sortMs + " ms, process " + stageTimer.ElapsedMilliseconds + " ms");
@@ -1149,7 +1188,7 @@ namespace mwb_materials
             }
 
             return new SourceTextureSet(albedoTask.Result, exponentTask.Result, normalTask.Result, emissive,
-                averageMetallicColor, averageRoughness, opacityMode, intermediates);
+                averageMetallicColor, averageRoughness, opacityMode, metalness != null, intermediates);
         }
     }
 }

@@ -284,7 +284,10 @@ namespace mwb_materials.MwbMats
 
         private static async Task GenerateJob(string path, string startPath, string debugPath, TextureGenerationJob job, MaterialManipulation.SourceSet sources, BatchProperties props, CancellationToken cancellationToken)
         {
-            MaterialManipulation.SourceTextureSet textures = await MaterialManipulation.GenerateTextures(sources, props.GenerateProps, cancellationToken);
+            bool surfaceGgx = props.VmtPreset != null && props.VmtPreset.IsSurfaceGgx;
+            MaterialManipulation.GenerateProperties generateProps = props.GenerateProps;
+            generateProps.bSurfaceGgx = surfaceGgx;
+            MaterialManipulation.SourceTextureSet textures = await MaterialManipulation.GenerateTextures(sources, generateProps, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
             //resolve opacity-related settings
@@ -411,6 +414,17 @@ namespace mwb_materials.MwbMats
             {
                 vmtValues.Add("BLENDTINTBYBASEALPHA", "1");
                 vmtValues.Add("OPACITYBLOCK", string.Empty);
+            }
+
+            if (surfaceGgx)
+            {
+                if (textures.HasMetalness)
+                {
+                    vmtValues.Add("METAL", "1");
+                }
+
+                VmtGenerator.Generate(exportPath, job.VmtFileName, vmtValues, props.VmtPreset, props.LogFunc);
+                return;
             }
 
             //envmap

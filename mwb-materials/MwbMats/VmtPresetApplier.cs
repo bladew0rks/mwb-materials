@@ -37,7 +37,7 @@ namespace mwb_materials.MwbMats
 
             List<PendingValue> topLevelValues = BuildTopLevelValues(preset, logFunc);
             Dictionary<string, string> proxyValues = BuildProxyValues(preset, logFunc);
-            string envmapTint = GetEnvmapTint(preset);
+            string envmapTint = preset.IsSurfaceGgx ? null : GetEnvmapTint(preset);
 
             if (!string.IsNullOrEmpty(envmapTint))
             {
@@ -84,6 +84,12 @@ namespace mwb_materials.MwbMats
         {
             List<PendingValue> result = new List<PendingValue>();
 
+            if (preset.IsSurfaceGgx)
+            {
+                AddSectionValues(result, preset.Custom, "custom", logFunc);
+                return result;
+            }
+
             AddFeatureSection(result, preset.Phong, "$phong", "phong", logFunc);
             AddFeatureSection(result, preset.Rimlight, "$rimlight", "rimlight", logFunc);
             AddSectionValues(result, preset.Envmap, "envmap", logFunc);
@@ -96,7 +102,7 @@ namespace mwb_materials.MwbMats
         {
             Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            if (!preset.MwEnvMapTintProxy.IsPresent)
+            if (!preset.MwEnvMapTintProxy.IsPresent || preset.IsSurfaceGgx)
             {
                 return result;
             }

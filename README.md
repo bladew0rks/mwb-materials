@@ -2,6 +2,8 @@
 
 ### Tool designed to mimic PBR with Source Engine's shader system.
 
+For DX11 Garry's Mod, the "SurfaceGGX (DX11 GMod)" preset outputs real PBR materials using the SurfaceGGX shader instead.
+
 ![laugh](https://raw.githubusercontent.com/9lbw/mwb-materials/refs/heads/main/autoconverters.png)
 
 If you need help click ![here](https://github.com/9lbw/mwb-materials/blob/main/help.md).

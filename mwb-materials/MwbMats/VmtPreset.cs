@@ -4,6 +4,9 @@ namespace mwb_materials.MwbMats
 {
     class VmtPreset
     {
+        public const string VertexLitGeneric = "VertexLitGeneric";
+        public const string SurfaceGgx = "SurfaceGGX";
+
         public static readonly VmtPreset Default = new VmtPreset("Default", string.Empty, string.Empty);
 
         public VmtPreset(string displayName, string id, string filePath)
@@ -16,6 +19,7 @@ namespace mwb_materials.MwbMats
             Envmap = new VmtPresetSection();
             Custom = new VmtPresetSection();
             MwEnvMapTintProxy = new VmtPresetSection();
+            Shader = VertexLitGeneric;
         }
 
         public string DisplayName { get; }
@@ -26,6 +30,12 @@ namespace mwb_materials.MwbMats
         public VmtPresetSection Envmap { get; }
         public VmtPresetSection Custom { get; }
         public VmtPresetSection MwEnvMapTintProxy { get; }
+        public string Shader { get; set; }
+
+        public bool IsSurfaceGgx
+        {
+            get { return string.Equals(Shader, SurfaceGgx, System.StringComparison.OrdinalIgnoreCase); }
+        }
 
         public bool IsDefault
         {

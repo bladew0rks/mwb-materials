@@ -1,6 +1,10 @@
 # To make a new preset, just copy this file and save it as a new .toml file in this folder.
 name = "Example preset"
 
+# Which shader the material uses. "VertexLitGeneric" (the default) or "SurfaceGGX" for DX11 GMod.
+# SurfaceGGX ignores the [phong], [rimlight], [envmap] and [proxies] sections; use [custom] for its parameters.
+shader = "VertexLitGeneric"
+
 # Having this section turns on the "$phong" (specular reflection) effect.
 # Change 'enabled = true' to 'false' if you want to turn it off completely.
 [phong]
