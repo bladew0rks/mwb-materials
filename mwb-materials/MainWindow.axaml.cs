@@ -60,7 +60,7 @@ namespace mwb_materials
             BrowseEnvMapsButton.Click += async (sender, args) => await BrowseInto(EnvMapsDestination, "Envmaps folder");
 
             foreach (CheckBox check in new[] { AoCheck, OpenGlNormalCheck, InvertNormalBlueCheck, InvertOpacityCheck, KeepIntermediatesCheck,
-                UseModelMaterialNamesCheck, BatchMoveOutputCheck, BatchIncludeFoldersCheck, AlbedoMipMapsCheck, NormalMipMapsCheck, ExponentMipMapsCheck })
+                UseModelMaterialNamesCheck, BatchMoveOutputCheck, BatchIncludeFoldersCheck, AlbedoMipMapsCheck, NormalMipMapsCheck, ExponentMipMapsCheck, CompressVtfsCheck })
             {
                 check.IsCheckedChanged += (sender, args) => SaveSettings();
             }
@@ -111,6 +111,7 @@ namespace mwb_materials
                 AlbedoMipMapsCheck.IsChecked = source.AlbedoMipMaps;
                 NormalMipMapsCheck.IsChecked = source.NormalMipMaps;
                 ExponentMipMapsCheck.IsChecked = source.ExponentMipMaps;
+                CompressVtfsCheck.IsChecked = source.CompressVtfs;
 
                 SetComboBoxValue(AlbedoCompression, TextureExporter.GetFormatName(source.AlbedoCompression ?? TextureExporter.FormatDXT5), TextureExporter.FormatDXT5);
                 SetComboBoxValue(NormalCompression, TextureExporter.GetFormatName(source.NormalCompression ?? TextureExporter.FormatRGBA8888), TextureExporter.FormatRGBA8888);
@@ -171,6 +172,7 @@ namespace mwb_materials
             settings.AlbedoMipMaps = AlbedoMipMapsCheck.IsChecked == true;
             settings.NormalMipMaps = NormalMipMapsCheck.IsChecked == true;
             settings.ExponentMipMaps = ExponentMipMapsCheck.IsChecked == true;
+            settings.CompressVtfs = CompressVtfsCheck.IsChecked == true;
             settings.VmtPreset = GetSelectedVmtPreset().Id;
             settings.ParallelMaterials = (int)(ParallelMaterialsUpDown.Value ?? 1);
             settings.Save();
@@ -309,6 +311,7 @@ namespace mwb_materials
                 bAlbedoMipMaps = AlbedoMipMapsCheck.IsChecked == true,
                 bNormalMipMaps = NormalMipMapsCheck.IsChecked == true,
                 bExponentMipMaps = ExponentMipMapsCheck.IsChecked == true,
+                bCompressVtfs = CompressVtfsCheck.IsChecked == true,
                 bKeepIntermediates = KeepIntermediatesCheck.IsChecked == true,
                 bUseModelMaterialNames = UseModelMaterialNamesCheck.IsChecked == true,
                 VmtPreset = GetSelectedVmtPreset(),

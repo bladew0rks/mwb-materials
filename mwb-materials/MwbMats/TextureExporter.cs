@@ -57,13 +57,16 @@ namespace mwb_materials.MwbMats
             return VtfImageFormat.DXT5;
         }
 
-        public static string Export(PixelBuffer image, string outputFolder, string outputName, string format, bool mipmaps, Action<string> logFunc, bool alphaIsCoverage = false)
+        public static string Export(PixelBuffer image, string outputFolder, string outputName, string format, bool mipmaps, Action<string> logFunc, bool alphaIsCoverage = false,
+            bool compress = false)
         {
             VtfCreateOptions options = new VtfCreateOptions()
             {
                 Format = ParseFormat(format),
                 GenerateMipmaps = mipmaps,
                 AlphaWeightedMipmaps = alphaIsCoverage,
+                Compression = compress ? VtfCompression.Zstd : VtfCompression.None,
+                CompressionLevel = 6,
                 ResizeMethod = IsValidVtfSize(image.Width) && IsValidVtfSize(image.Height) ? VtfResizeMethod.None : VtfResizeMethod.NearestPowerOfTwo,
             };
 
@@ -81,7 +84,7 @@ namespace mwb_materials.MwbMats
             timer.Restart();
             WriteLocked(path, vtf.Save);
             logFunc?.Invoke("Timing: " + outputName + " encode " + encodeMs + " ms, write " + timer.ElapsedMilliseconds + " ms");
-            logFunc?.Invoke("Wrote " + path + " (" + format + ", " + vtf.Width + "x" + vtf.Height + ", " + vtf.MipmapCount + " mip" + (vtf.MipmapCount == 1 ? "" : "s") + ")");
+            logFunc?.Invoke("Wrote " + path + " (" + format + (compress ? ", zstd" : "") + ", " + vtf.Width + "x" + vtf.Height + ", " + vtf.MipmapCount + " mip" + (vtf.MipmapCount == 1 ? "" : "s") + ")");
             return path;
         }
 

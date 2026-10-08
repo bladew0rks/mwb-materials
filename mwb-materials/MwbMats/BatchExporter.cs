@@ -23,6 +23,7 @@ namespace mwb_materials.MwbMats
             public bool bAlbedoMipMaps { get; set; }
             public bool bNormalMipMaps { get; set; }
             public bool bExponentMipMaps { get; set; }
+            public bool bCompressVtfs { get; set; }
             public bool bKeepIntermediates { get; set; }
             public bool bUseModelMaterialNames { get; set; }
             public float AlphatestReference { get; set; }
@@ -351,7 +352,7 @@ namespace mwb_materials.MwbMats
 
             void QueueExport(PixelBuffer image, string outputName, string compression, bool mipmaps, bool alphaIsCoverage = false)
             {
-                exports.Add(Task.Run(() => TextureExporter.Export(image, exportPath, outputName, compression, mipmaps, props.LogFunc, alphaIsCoverage), cancellationToken));
+                exports.Add(Task.Run(() => TextureExporter.Export(image, exportPath, outputName, compression, mipmaps, props.LogFunc, alphaIsCoverage, props.bCompressVtfs), cancellationToken));
             }
 
             if (textures.Albedo != null)

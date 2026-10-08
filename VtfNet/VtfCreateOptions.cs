@@ -41,4 +41,7 @@ public sealed class VtfCreateOptions
     public int FaceCount { get; set; } = 1;
 
     public int AlphaThreshold { get; set; } = 128;
+
+    public VtfCompression Compression { get; set; } = VtfCompression.None;
+    public int CompressionLevel { get; set; } = 6;
 }

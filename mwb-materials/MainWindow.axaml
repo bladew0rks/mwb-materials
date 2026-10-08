@@ -94,6 +94,8 @@
                 <ComboBox x:Name="ExponentCompression" Grid.Row="3" Grid.Column="1" Margin="8,0" />
                 <CheckBox x:Name="ExponentMipMapsCheck" Grid.Row="3" Grid.Column="2" />
               </Grid>
+              <CheckBox x:Name="CompressVtfsCheck" Content="Compress VTFs (DX11 GMod)" Margin="0,8,0,0"
+                        ToolTip.Tip="Writes zstd compressed VTF 7.6 files, roughly half the size or less on disk. Only DX11 GMod can load them." />
             </StackPanel>
           </Border>
 

@@ -51,6 +51,9 @@ public sealed class VtfFile
     public float[] Reflectivity { get; set; } = [1f, 1f, 1f];
     public float BumpmapScale { get; set; } = 1f;
     public VtfImageFormat Format { get; private set; } = VtfImageFormat.None;
+
+    public VtfCompression Compression { get; set; } = VtfCompression.None;
+    public int CompressionLevel { get; set; }
     public int MipmapCount { get; private set; } = 1;
 
     public VtfImageFormat ThumbnailFormat { get; private set; } = VtfImageFormat.None;
@@ -109,6 +112,40 @@ public sealed class VtfFile
         }
 
         return size * frames * faces;
+    }
+
+    private (byte[] Image, byte[] Aux) CompressImageData()
+    {
+        var chunks = new List<(int Offset, int Length)>();
+        int offset = 0;
+
+        for (int level = MipmapCount - 1; level >= 0; level--)
+        {
+            int mipSize = ComputeMipmapSize(Width, Height, Depth, level, Format);
+
+            for (int i = 0; i < FrameCount * FaceCount; i++)
+            {
+                chunks.Add((offset, mipSize));
+                offset += mipSize;
+            }
+        }
+
+        byte[][] compressed = new byte[chunks.Count][];
+        Parallel.For(0, chunks.Count, i => compressed[i] = VtfCompressionCodec.Compress(ImageData.AsSpan(chunks[i].Offset, chunks[i].Length), Compression, CompressionLevel));
+
+        byte[] image = new byte[compressed.Sum(chunk => chunk.Length)];
+        byte[] aux = new byte[4 + 4 * compressed.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(aux, (uint)(ushort)CompressionLevel | ((uint)(ushort)Compression << 16));
+        int position = 0;
+
+        for (int i = 0; i < compressed.Length; i++)
+        {
+            compressed[i].CopyTo(image, position);
+            position += compressed[i].Length;
+            BinaryPrimitives.WriteUInt32LittleEndian(aux.AsSpan(4 + 4 * i), (uint)compressed[i].Length);
+        }
+
+        return (image, aux);
     }
 
     public int GetImageOffset(int frame, int face, int slice, int mipLevel)
@@ -237,7 +274,9 @@ public sealed class VtfFile
         VtfFile file = new VtfFile
         {
             MajorVersion = options.MajorVersion,
-            MinorVersion = VtfImageFormatInfo.IsStrataFormat(storedFormat) ? Math.Max(options.MinorVersion, 6) : options.MinorVersion,
+            MinorVersion = VtfImageFormatInfo.IsStrataFormat(storedFormat) || options.Compression != VtfCompression.None ? Math.Max(options.MinorVersion, 6) : options.MinorVersion,
+            Compression = options.Compression,
+            CompressionLevel = options.Compression == VtfCompression.None ? 0 : options.CompressionLevel,
             Width = width,
             Height = height,
             Depth = 1,
@@ -666,13 +705,56 @@ public sealed class VtfFile
             }
 
             long imageSize = ComputeImageDataSize(file.Width, file.Height, file.Depth, file.MipmapCount, file.FrameCount, file.FaceCount, file.Format);
+            VtfResource? aux = file.Resources.Find(resource => resource.Type == VtfCompressionCodec.AuxCompressionResource);
 
-            if (imageOffset + imageSize > data.Length)
+            if (aux?.Data != null && aux.Data.Length >= 4 && VtfCompressionCodec.ReadSettings(aux.Data).Level != 0)
             {
-                throw new InvalidDataException("VTF is too small for its image data.");
-            }
+                var (method, level) = VtfCompressionCodec.ReadSettings(aux.Data);
+                file.ImageData = new byte[imageSize];
+                file.Compression = method;
+                file.CompressionLevel = level;
+                file.Resources.Remove(aux);
+                long source = imageOffset;
+                int destination = 0;
+                int chunk = 0;
 
-            file.ImageData = data.Slice((int)imageOffset, (int)imageSize).ToArray();
+                for (int level2 = file.MipmapCount - 1; level2 >= 0; level2--)
+                {
+                    int mipSize = ComputeMipmapSize(file.Width, file.Height, file.Depth, level2, file.Format);
+
+                    for (int frame = 0; frame < file.FrameCount; frame++)
+                    {
+                        for (int face = 0; face < file.FaceCount; face++)
+                        {
+                            if (4 + chunk * 4 + 4 > aux.Data.Length)
+                            {
+                                throw new InvalidDataException("VTF compression resource is missing chunk lengths.");
+                            }
+
+                            int length = (int)BinaryPrimitives.ReadUInt32LittleEndian(aux.Data.AsSpan(4 + chunk * 4));
+
+                            if (source + length > data.Length)
+                            {
+                                throw new InvalidDataException("VTF is too small for its compressed image data.");
+                            }
+
+                            VtfCompressionCodec.Decompress(data.Slice((int)source, length), file.ImageData.AsSpan(destination, mipSize), method);
+                            source += length;
+                            destination += mipSize;
+                            chunk++;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                if (imageOffset + imageSize > data.Length)
+                {
+                    throw new InvalidDataException("VTF is too small for its image data.");
+                }
+
+                file.ImageData = data.Slice((int)imageOffset, (int)imageSize).ToArray();
+            }
         }
 
         return file;
@@ -722,6 +804,12 @@ public sealed class VtfFile
         }
 
         byte[] thumbnail = HasThumbnail ? ThumbnailData! : [];
+        bool compressed = Compression != VtfCompression.None && CompressionLevel != 0;
+
+        if (compressed && MinorVersion < 6)
+        {
+            throw new InvalidOperationException("Compressed VTF image data requires version 7.6.");
+        }
 
         var entries = new List<(uint Type, byte[]? Chunk, uint Inline)>();
 
@@ -732,10 +820,24 @@ public sealed class VtfFile
                 entries.Add((LowResImageResource, thumbnail, 0));
             }
 
-            entries.Add((ImageResource, ImageData, 0));
+            if (compressed)
+            {
+                var (image, aux) = CompressImageData();
+                entries.Add((ImageResource, image, 0));
+                entries.Add((VtfCompressionCodec.AuxCompressionResource, aux, 0));
+            }
+            else
+            {
+                entries.Add((ImageResource, ImageData, 0));
+            }
 
             foreach (VtfResource resource in Resources)
             {
+                if (resource.Type == VtfCompressionCodec.AuxCompressionResource)
+                {
+                    continue;
+                }
+
                 entries.Add((resource.Type, resource.HasDataChunk ? resource.Data ?? [] : null, resource.InlineValue));
             }
 
