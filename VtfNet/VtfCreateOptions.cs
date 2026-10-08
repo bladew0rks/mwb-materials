@@ -44,4 +44,6 @@ public sealed class VtfCreateOptions
 
     public VtfCompression Compression { get; set; } = VtfCompression.None;
     public int CompressionLevel { get; set; } = 6;
+
+    public float RdoLambda { get; set; }
 }

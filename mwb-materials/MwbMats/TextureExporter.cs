@@ -15,6 +15,18 @@ namespace mwb_materials.MwbMats
 
         public static readonly string[] Formats = new string[] { FormatDXT5, FormatRGBA8888, FormatDXT1, FormatBC7, FormatBC6H };
 
+        public static readonly string RdoOff = "Off";
+        public static readonly string[] RdoLevels = new string[] { RdoOff, "Low", "Medium", "High" };
+
+        private static readonly float[] RdoLambdas = new float[] { 0f, 0.25f, 0.5f, 1f };
+        private static readonly float[] RdoNormalLambdas = new float[] { 0f, 0.1f, 0.25f, 0.5f };
+
+        public static float GetRdoLambda(string level, bool normalMap)
+        {
+            int index = Math.Max(0, Array.IndexOf(RdoLevels, level));
+            return normalMap ? RdoNormalLambdas[index] : RdoLambdas[index];
+        }
+
         private static readonly ConcurrentDictionary<string, object> PathLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
 
         public static string GetFormatName(string format)
@@ -58,7 +70,7 @@ namespace mwb_materials.MwbMats
         }
 
         public static string Export(PixelBuffer image, string outputFolder, string outputName, string format, bool mipmaps, Action<string> logFunc, bool alphaIsCoverage = false,
-            bool compress = false)
+            bool compress = false, float rdoLambda = 0f)
         {
             VtfCreateOptions options = new VtfCreateOptions()
             {
@@ -67,6 +79,7 @@ namespace mwb_materials.MwbMats
                 AlphaWeightedMipmaps = alphaIsCoverage,
                 Compression = compress ? VtfCompression.Zstd : VtfCompression.None,
                 CompressionLevel = 6,
+                RdoLambda = rdoLambda,
                 ResizeMethod = IsValidVtfSize(image.Width) && IsValidVtfSize(image.Height) ? VtfResizeMethod.None : VtfResizeMethod.NearestPowerOfTwo,
             };
 
@@ -84,7 +97,7 @@ namespace mwb_materials.MwbMats
             timer.Restart();
             WriteLocked(path, vtf.Save);
             logFunc?.Invoke("Timing: " + outputName + " encode " + encodeMs + " ms, write " + timer.ElapsedMilliseconds + " ms");
-            logFunc?.Invoke("Wrote " + path + " (" + format + (compress ? ", zstd" : "") + ", " + vtf.Width + "x" + vtf.Height + ", " + vtf.MipmapCount + " mip" + (vtf.MipmapCount == 1 ? "" : "s") + ")");
+            logFunc?.Invoke("Wrote " + path + " (" + format + (compress ? ", zstd" : "") + (rdoLambda > 0f ? ", rdo " + rdoLambda.ToString(System.Globalization.CultureInfo.InvariantCulture) : "") + ", " + vtf.Width + "x" + vtf.Height + ", " + vtf.MipmapCount + " mip" + (vtf.MipmapCount == 1 ? "" : "s") + ")");
             return path;
         }
 

@@ -24,6 +24,7 @@ namespace mwb_materials.MwbMats
             public bool bNormalMipMaps { get; set; }
             public bool bExponentMipMaps { get; set; }
             public bool bCompressVtfs { get; set; }
+            public string RdoLevel { get; set; }
             public bool bKeepIntermediates { get; set; }
             public bool bUseModelMaterialNames { get; set; }
             public float AlphatestReference { get; set; }
@@ -350,9 +351,10 @@ namespace mwb_materials.MwbMats
             string exportPath = string.IsNullOrEmpty(movePath) ? jobOutputPath : movePath;
             List<Task> exports = new List<Task>();
 
-            void QueueExport(PixelBuffer image, string outputName, string compression, bool mipmaps, bool alphaIsCoverage = false)
+            void QueueExport(PixelBuffer image, string outputName, string compression, bool mipmaps, bool alphaIsCoverage = false, bool normalMap = false)
             {
-                exports.Add(Task.Run(() => TextureExporter.Export(image, exportPath, outputName, compression, mipmaps, props.LogFunc, alphaIsCoverage, props.bCompressVtfs), cancellationToken));
+                float rdoLambda = TextureExporter.GetRdoLambda(props.RdoLevel, normalMap);
+                exports.Add(Task.Run(() => TextureExporter.Export(image, exportPath, outputName, compression, mipmaps, props.LogFunc, alphaIsCoverage, props.bCompressVtfs, rdoLambda), cancellationToken));
             }
 
             if (textures.Albedo != null)
@@ -373,7 +375,7 @@ namespace mwb_materials.MwbMats
             {
                 string outputName = job.TextureBaseName + "_n";
                 vmtValues.Add("NORMALNAME", outputName);
-                QueueExport(textures.Normal, outputName, props.NormalCompression, props.bNormalMipMaps);
+                QueueExport(textures.Normal, outputName, props.NormalCompression, props.bNormalMipMaps, normalMap: true);
             }
 
             if (textures.Emissive != null)

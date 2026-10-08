@@ -38,6 +38,7 @@ namespace mwb_materials
             NormalCompression.ItemsSource = TextureExporter.Formats;
             ExponentCompression.ItemsSource = TextureExporter.Formats;
             ClampComboBox.ItemsSource = ClampSizes;
+            RdoComboBox.ItemsSource = TextureExporter.RdoLevels;
 
             logTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(100), DispatcherPriority.Background, (sender, args) => FlushLog());
             logTimer.Start();
@@ -65,7 +66,7 @@ namespace mwb_materials
                 check.IsCheckedChanged += (sender, args) => SaveSettings();
             }
 
-            foreach (ComboBox combo in new[] { AlbedoCompression, NormalCompression, ExponentCompression, ClampComboBox, VmtPresetComboBox })
+            foreach (ComboBox combo in new[] { AlbedoCompression, NormalCompression, ExponentCompression, ClampComboBox, RdoComboBox, VmtPresetComboBox })
             {
                 combo.SelectionChanged += (sender, args) => SaveSettings();
             }
@@ -117,6 +118,7 @@ namespace mwb_materials
                 SetComboBoxValue(NormalCompression, TextureExporter.GetFormatName(source.NormalCompression ?? TextureExporter.FormatRGBA8888), TextureExporter.FormatRGBA8888);
                 SetComboBoxValue(ExponentCompression, TextureExporter.GetFormatName(source.ExponentCompression ?? TextureExporter.FormatDXT5), TextureExporter.FormatDXT5);
                 SetComboBoxValue(ClampComboBox, source.ClampSize, "4096");
+                SetComboBoxValue(RdoComboBox, source.RdoLevel, TextureExporter.RdoOff);
                 SetPresetComboBoxValue(source.VmtPreset);
 
                 AoStrengthSlider.Value = Math.Clamp(source.AoAlbedoStrength, 0, 100);
@@ -173,6 +175,7 @@ namespace mwb_materials
             settings.NormalMipMaps = NormalMipMapsCheck.IsChecked == true;
             settings.ExponentMipMaps = ExponentMipMapsCheck.IsChecked == true;
             settings.CompressVtfs = CompressVtfsCheck.IsChecked == true;
+            settings.RdoLevel = RdoComboBox.SelectedItem as string ?? TextureExporter.RdoOff;
             settings.VmtPreset = GetSelectedVmtPreset().Id;
             settings.ParallelMaterials = (int)(ParallelMaterialsUpDown.Value ?? 1);
             settings.Save();
@@ -312,6 +315,7 @@ namespace mwb_materials
                 bNormalMipMaps = NormalMipMapsCheck.IsChecked == true,
                 bExponentMipMaps = ExponentMipMapsCheck.IsChecked == true,
                 bCompressVtfs = CompressVtfsCheck.IsChecked == true,
+                RdoLevel = RdoComboBox.SelectedItem as string ?? TextureExporter.RdoOff,
                 bKeepIntermediates = KeepIntermediatesCheck.IsChecked == true,
                 bUseModelMaterialNames = UseModelMaterialNamesCheck.IsChecked == true,
                 VmtPreset = GetSelectedVmtPreset(),

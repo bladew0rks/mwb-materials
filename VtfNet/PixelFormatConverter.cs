@@ -177,7 +177,8 @@ public static class PixelFormatConverter
         return output;
     }
 
-    public static void FromRgba8888(ReadOnlySpan<byte> rgba, int width, int height, VtfImageFormat format, byte[] output, int outputOffset, int alphaThreshold = 128)
+    public static void FromRgba8888(ReadOnlySpan<byte> rgba, int width, int height, VtfImageFormat format, byte[] output, int outputOffset, int alphaThreshold = 128,
+        float rdoLambda = 0f)
     {
         switch (format)
         {
@@ -191,7 +192,7 @@ public static class PixelFormatConverter
             case VtfImageFormat.ATI2N:
             case VtfImageFormat.DXT1OneBitAlpha:
             case VtfImageFormat.BC7:
-                BcEncoder.Encode(format switch
+                BcFormat bcFormat = format switch
                 {
                     VtfImageFormat.DXT1 => BcFormat.Bc1,
                     VtfImageFormat.DXT1OneBitAlpha => BcFormat.Bc1Alpha,
@@ -200,7 +201,15 @@ public static class PixelFormatConverter
                     VtfImageFormat.ATI1N => BcFormat.Bc4,
                     VtfImageFormat.BC7 => BcFormat.Bc7,
                     _ => BcFormat.Bc5,
-                }, rgba, width, height, output.AsSpan(outputOffset), alphaThreshold);
+                };
+
+                BcEncoder.Encode(bcFormat, rgba, width, height, output.AsSpan(outputOffset), alphaThreshold);
+
+                if (rdoLambda > 0f)
+                {
+                    BcRdo.Optimize(bcFormat, rgba, width, height, output.AsSpan(outputOffset), rdoLambda, alphaThreshold);
+                }
+
                 return;
             case VtfImageFormat.BC6HSigned:
             case VtfImageFormat.BC6HUnsigned:

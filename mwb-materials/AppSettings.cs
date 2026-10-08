@@ -28,6 +28,7 @@ namespace mwb_materials
         public bool NormalMipMaps { get; set; }
         public bool ExponentMipMaps { get; set; } = true;
         public bool CompressVtfs { get; set; }
+        public string RdoLevel { get; set; } = "Off";
         public string VmtPreset { get; set; } = string.Empty;
         public int ParallelMaterials { get; set; } = DefaultParallelMaterials;
         public string LastBatchFolder { get; set; } = string.Empty;
