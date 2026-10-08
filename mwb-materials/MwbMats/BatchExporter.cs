@@ -353,7 +353,7 @@ namespace mwb_materials.MwbMats
 
             void QueueExport(PixelBuffer image, string outputName, string compression, bool mipmaps, bool alphaIsCoverage = false, bool normalMap = false)
             {
-                float rdoLambda = TextureExporter.GetRdoLambda(props.RdoLevel, normalMap);
+                float rdoLambda = props.bCompressVtfs ? TextureExporter.GetRdoLambda(props.RdoLevel, normalMap) : 0f;
                 exports.Add(Task.Run(() => TextureExporter.Export(image, exportPath, outputName, compression, mipmaps, props.LogFunc, alphaIsCoverage, props.bCompressVtfs, rdoLambda), cancellationToken));
             }
 
