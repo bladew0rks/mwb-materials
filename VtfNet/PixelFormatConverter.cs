@@ -97,6 +97,8 @@ public static class PixelFormatConverter
                 return BcDecoder.DecodeBc4(data, width, height);
             case VtfImageFormat.ATI2N:
                 return BcDecoder.DecodeBc5(data, width, height);
+            case VtfImageFormat.BC7:
+                return BcDecoder.DecodeBc7(data, width, height);
             case VtfImageFormat.RGBA16161616F:
             case VtfImageFormat.RGBA16161616:
             case VtfImageFormat.R32F:
@@ -183,6 +185,7 @@ public static class PixelFormatConverter
             case VtfImageFormat.ATI1N:
             case VtfImageFormat.ATI2N:
             case VtfImageFormat.DXT1OneBitAlpha:
+            case VtfImageFormat.BC7:
                 BcEncoder.Encode(format switch
                 {
                     VtfImageFormat.DXT1 => BcFormat.Bc1,
@@ -190,6 +193,7 @@ public static class PixelFormatConverter
                     VtfImageFormat.DXT3 => BcFormat.Bc2,
                     VtfImageFormat.DXT5 => BcFormat.Bc3,
                     VtfImageFormat.ATI1N => BcFormat.Bc4,
+                    VtfImageFormat.BC7 => BcFormat.Bc7,
                     _ => BcFormat.Bc5,
                 }, rgba, width, height, output.AsSpan(outputOffset), alphaThreshold);
                 return;

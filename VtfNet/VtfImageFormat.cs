@@ -43,6 +43,7 @@ public enum VtfImageFormat
     ATI1N,
     ATI2N,
     HdrBGRA8888,
+    BC7 = 70,
 }
 
 public sealed record VtfImageFormatInfo(
@@ -101,8 +102,15 @@ public sealed record VtfImageFormatInfo(
         new("HDR BGRA8888", 32, 4, 8, 8, 8, 8, false, true, true),
     ];
 
+    private static readonly VtfImageFormatInfo Bc7 = new("BC7", 8, 0, 0, 0, 0, 8, true, true, true);
+
     public static VtfImageFormatInfo Get(VtfImageFormat format)
     {
+        if (format == VtfImageFormat.BC7)
+        {
+            return Bc7;
+        }
+
         int index = (int)format;
 
         if (index < 0 || index >= Table.Length)

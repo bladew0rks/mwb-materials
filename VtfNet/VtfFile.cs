@@ -188,9 +188,9 @@ public sealed class VtfFile
     {
         options ??= new VtfCreateOptions();
 
-        if (options.MajorVersion != 7 || options.MinorVersion < 0 || options.MinorVersion > 5)
+        if (options.MajorVersion != 7 || options.MinorVersion < 0 || options.MinorVersion > 6)
         {
-            throw new ArgumentException("VTF version must be between 7.0 and 7.5.", nameof(options));
+            throw new ArgumentException("VTF version must be between 7.0 and 7.6.", nameof(options));
         }
 
         if (options.FaceCount != 1 && options.FaceCount != 6)
@@ -237,7 +237,7 @@ public sealed class VtfFile
         VtfFile file = new VtfFile
         {
             MajorVersion = options.MajorVersion,
-            MinorVersion = options.MinorVersion,
+            MinorVersion = storedFormat == VtfImageFormat.BC7 ? Math.Max(options.MinorVersion, 6) : options.MinorVersion,
             Width = width,
             Height = height,
             Depth = 1,
@@ -517,7 +517,7 @@ public sealed class VtfFile
             MinorVersion = (int)BinaryPrimitives.ReadUInt32LittleEndian(data[8..]),
         };
 
-        if (file.MajorVersion != 7 || file.MinorVersion < 0 || file.MinorVersion > 5)
+        if (file.MajorVersion != 7 || file.MinorVersion < 0 || file.MinorVersion > 6)
         {
             throw new InvalidDataException("Unsupported VTF version " + file.MajorVersion + "." + file.MinorVersion + ".");
         }
@@ -553,7 +553,7 @@ public sealed class VtfFile
             throw new InvalidDataException("VTF has zero width or height.");
         }
 
-        if (file.Format < VtfImageFormat.None || (int)file.Format > (int)VtfImageFormat.HdrBGRA8888)
+        if (file.Format < VtfImageFormat.None || ((int)file.Format > (int)VtfImageFormat.HdrBGRA8888 && file.Format != VtfImageFormat.BC7))
         {
             throw new InvalidDataException("Unknown VTF image format " + (int)file.Format + ".");
         }
@@ -704,9 +704,9 @@ public sealed class VtfFile
 
     public void Save(Stream stream)
     {
-        if (MajorVersion != 7 || MinorVersion < 0 || MinorVersion > 5)
+        if (MajorVersion != 7 || MinorVersion < 0 || MinorVersion > 6)
         {
-            throw new InvalidOperationException("VTF version must be between 7.0 and 7.5.");
+            throw new InvalidOperationException("VTF version must be between 7.0 and 7.6.");
         }
 
         if (Format == VtfImageFormat.None || ImageData.Length == 0)
