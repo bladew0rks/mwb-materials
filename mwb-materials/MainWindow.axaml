@@ -97,7 +97,7 @@
               <CheckBox x:Name="CompressVtfsCheck" Content="Compress VTFs (DX11 GMod)" Margin="0,8,0,0"
                         ToolTip.Tip="Writes zstd compressed VTF 7.6 files. DX11 GMod only." />
               <Grid ColumnDefinitions="90,*,Auto" Margin="0,6,0,0" IsEnabled="{Binding #CompressVtfsCheck.IsChecked}"
-                    ToolTip.Tip="Makes compressed VTFs smaller at a small quality cost. Normal maps get a gentler setting. No effect on RGBA8888 and BC6H.">
+                    ToolTip.Tip="Makes compressed VTFs smaller at a small quality cost. No effect on RGBA8888 and BC6H.">
                 <TextBlock Text="RDO" VerticalAlignment="Center" />
                 <ComboBox x:Name="RdoComboBox" Grid.Column="1" Margin="8,0" />
               </Grid>
