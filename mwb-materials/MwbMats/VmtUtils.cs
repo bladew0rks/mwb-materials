@@ -43,7 +43,7 @@ namespace mwb_materials.MwbMats
             return file;
         }
 
-        public static string GetVMTPath(string originalPath)
+        public static string GetVMTPath(string originalPath, string description = null, Action<string> logFunc = null)
         {
             if (string.IsNullOrEmpty(originalPath))
             {
@@ -53,7 +53,19 @@ namespace mwb_materials.MwbMats
             string[] parts = originalPath.Split(new char[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
             int materialsIndex = Array.FindLastIndex(parts, part => string.Equals(part, "materials", StringComparison.OrdinalIgnoreCase));
 
-            return materialsIndex < 0 ? string.Empty : string.Join("\\", parts.Skip(materialsIndex + 1));
+            if (materialsIndex >= 0)
+            {
+                return string.Join("\\", parts.Skip(materialsIndex + 1));
+            }
+
+            string folder = parts.Length > 0 ? parts[^1] : string.Empty;
+            logFunc?.Invoke("Warning: " + (description ?? "Output") + " folder \"" + originalPath + "\" is not inside a \"materials\" folder, so VMT paths use \"" + folder + "\"");
+            return folder;
+        }
+
+        public static string JoinVMTPath(string folder, string name)
+        {
+            return string.IsNullOrEmpty(folder) ? name : folder + "\\" + name;
         }
     }
 }

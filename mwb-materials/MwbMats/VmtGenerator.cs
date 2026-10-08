@@ -14,6 +14,26 @@ namespace mwb_materials.MwbMats
             name = name.Trim().Replace(".vmt", string.Empty);
         }
 
+        private static string CollapseBlankLines(string content)
+        {
+            string newline = content.Contains("\r\n") ? "\r\n" : "\n";
+            List<string> lines = new List<string>();
+
+            foreach (string line in content.Replace("\r\n", "\n").Split('\n'))
+            {
+                bool blank = string.IsNullOrWhiteSpace(line);
+
+                if (blank && lines.Count > 0 && lines[^1].Length == 0)
+                {
+                    continue;
+                }
+
+                lines.Add(blank ? string.Empty : line);
+            }
+
+            return string.Join(newline, lines);
+        }
+
         public static string Generate(string path, string name, Dictionary<string, object> values, VmtPreset preset = null, Action<string> logFunc = null)
         {
             SanitizeName(ref name);
@@ -24,7 +44,7 @@ namespace mwb_materials.MwbMats
                 content = content.Replace("${" + pair.Key + "}", pair.Value.ToString());
             }
 
-            content = VmtPresetApplier.Apply(content, preset, logFunc);
+            content = CollapseBlankLines(VmtPresetApplier.Apply(content, preset, logFunc));
 
             string vmtName = Path.GetFileNameWithoutExtension(name) + ".vmt";
             string vmtPath = Path.Combine(path, vmtName);

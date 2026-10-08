@@ -1,8 +1,8 @@
 "VertexLitGeneric"
 {
-    "$basetexture" "${EXPORTPATH}\${ALBEDONAME}"
-    "$bumpmap" "${EXPORTPATH}\${NORMALNAME}"
-    "$phongexponenttexture" "${EXPORTPATH}\${EXPONENTNAME}"
+    "$basetexture" "${ALBEDOPATH}"
+    "$bumpmap" "${NORMALPATH}"
+    "$phongexponenttexture" "${EXPONENTPATH}"
 
     /////////////////
     "$color2" "[0 0 0]"                                     //do not touch this
@@ -25,7 +25,7 @@
     "$normalmapalphaenvmapmask" "1"                         //do not touch this
     /////////////////
 
-    "$envmap" "${ENVMAPPATH}\${ENVMAP}"
+    "$envmap" "${ENVMAPFILE}"
     "$envmaptint" "${ENVMAPTINT}"                 
 
 ${OPACITYBLOCK}
@@ -39,7 +39,7 @@ ${DETAILBLOCK}
         {
             "min" "0"
             "max" "1"
-            "envmap" "${ENVMAPPATH}\${ENVMAP}"
+            "envmap" "${ENVMAPFILE}"
             "color" "${ENVMAPTINT}"
         }
     }

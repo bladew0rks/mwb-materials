@@ -384,8 +384,16 @@ namespace mwb_materials.MwbMats
             Color averageMetallicColor = textures.AverageMetallicColor;
             double averageRoughness = textures.AverageRoughness;
 
-            string vmtExportPath = VmtUtils.GetVMTPath(movePath);
-            vmtValues.Add("EXPORTPATH", vmtExportPath);
+            string vmtExportPath = VmtUtils.GetVMTPath(movePath, "Output", props.LogFunc);
+
+            foreach (string key in new[] { "ALBEDO", "NORMAL", "EXPONENT" })
+            {
+                if (vmtValues.TryGetValue(key + "NAME", out object textureName))
+                {
+                    vmtValues.Add(key + "PATH", VmtUtils.JoinVMTPath(vmtExportPath, textureName.ToString()));
+                }
+            }
+
             vmtValues.Add("DETAILBLOCK", GetDetailBlock(vmtExportPath, detailName));
 
             //opacity
@@ -410,14 +418,23 @@ namespace mwb_materials.MwbMats
             vmtValues.Add("ENVMAP", envmapTexture.Name);
             vmtValues.Add("ENVMAPTINT", VmtUtils.GetVMTVector(averageMetallicColor));
 
-            string envPath = !string.IsNullOrEmpty(props.EnvRootPath) ? props.EnvRootPath : movePath;
-            vmtValues.Add("ENVMAPPATH", VmtUtils.GetVMTPath(envPath));
+            string envPath;
+            string vmtEnvPath;
 
-            if (!string.IsNullOrEmpty(envPath))
+            if (!string.IsNullOrEmpty(props.EnvRootPath))
             {
-                Directory.CreateDirectory(envPath);
-                TextureExporter.WriteAllBytesLocked(Path.Combine(envPath, envmapTexture.Name + ".vtf"), envmapTexture.Content);
+                envPath = props.EnvRootPath;
+                vmtEnvPath = VmtUtils.GetVMTPath(envPath, "Envmaps", props.LogFunc);
             }
+            else
+            {
+                envPath = exportPath;
+                vmtEnvPath = vmtExportPath;
+            }
+
+            vmtValues.Add("ENVMAPFILE", VmtUtils.JoinVMTPath(vmtEnvPath, envmapTexture.Name));
+            Directory.CreateDirectory(envPath);
+            TextureExporter.WriteAllBytesLocked(Path.Combine(envPath, envmapTexture.Name + ".vtf"), envmapTexture.Content);
 
             //generate vmt
             VmtGenerator.Generate(exportPath, job.VmtFileName, vmtValues, props.VmtPreset, props.LogFunc);
@@ -430,7 +447,7 @@ namespace mwb_materials.MwbMats
                 return string.Empty;
             }
 
-            string detailPath = string.IsNullOrEmpty(exportPath) ? detailName : exportPath + "\\" + detailName;
+            string detailPath = VmtUtils.JoinVMTPath(exportPath, detailName);
 
             return
                 "    \"$detail\" \"" + detailPath + "\"\r\n" +
