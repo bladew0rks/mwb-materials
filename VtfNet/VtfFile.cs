@@ -315,7 +315,7 @@ public sealed class VtfFile
             int frame = item.Image / options.FaceCount;
             int face = item.Image % options.FaceCount;
             PixelFormatConverter.FromRgba8888(chains[item.Image][item.Level], w, h, options.Format,
-                file.ImageData, file.GetImageOffset(frame, face, 0, item.Level), options.AlphaThreshold, options.RdoLambda);
+                file.ImageData, file.GetImageOffset(frame, face, 0, item.Level), options.AlphaThreshold, options.RdoLambda, options.Perceptual);
         });
 
         if (options.GenerateThumbnail)

@@ -70,7 +70,7 @@ namespace mwb_materials.MwbMats
         }
 
         public static string Export(PixelBuffer image, string outputFolder, string outputName, string format, bool mipmaps, Action<string> logFunc, bool alphaIsCoverage = false,
-            bool compress = false, float rdoLambda = 0f)
+            bool compress = false, float rdoLambda = 0f, bool perceptual = false)
         {
             VtfCreateOptions options = new VtfCreateOptions()
             {
@@ -80,6 +80,7 @@ namespace mwb_materials.MwbMats
                 Compression = compress ? VtfCompression.Zstd : VtfCompression.None,
                 CompressionLevel = 6,
                 RdoLambda = rdoLambda,
+                Perceptual = perceptual,
                 ResizeMethod = IsValidVtfSize(image.Width) && IsValidVtfSize(image.Height) ? VtfResizeMethod.None : VtfResizeMethod.NearestPowerOfTwo,
             };
 

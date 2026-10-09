@@ -46,4 +46,6 @@ public sealed class VtfCreateOptions
     public int CompressionLevel { get; set; } = 6;
 
     public float RdoLambda { get; set; }
+
+    public bool Perceptual { get; set; }
 }

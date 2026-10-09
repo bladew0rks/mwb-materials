@@ -351,17 +351,18 @@ namespace mwb_materials.MwbMats
             string exportPath = string.IsNullOrEmpty(movePath) ? jobOutputPath : movePath;
             List<Task> exports = new List<Task>();
 
-            void QueueExport(PixelBuffer image, string outputName, string compression, bool mipmaps, bool alphaIsCoverage = false, bool normalMap = false)
+            void QueueExport(PixelBuffer image, string outputName, string compression, bool mipmaps, bool alphaIsCoverage = false, bool normalMap = false, bool color = false)
             {
                 float rdoLambda = props.bCompressVtfs ? TextureExporter.GetRdoLambda(props.RdoLevel, normalMap) : 0f;
-                exports.Add(Task.Run(() => TextureExporter.Export(image, exportPath, outputName, compression, mipmaps, props.LogFunc, alphaIsCoverage, props.bCompressVtfs, rdoLambda), cancellationToken));
+                exports.Add(Task.Run(() => TextureExporter.Export(image, exportPath, outputName, compression, mipmaps, props.LogFunc, alphaIsCoverage, props.bCompressVtfs, rdoLambda,
+                    color), cancellationToken));
             }
 
             if (textures.Albedo != null)
             {
                 string outputName = job.TextureBaseName + "_rgb";
                 vmtValues.Add("ALBEDONAME", outputName);
-                QueueExport(textures.Albedo, outputName, effectiveAlbedoCompression, props.bAlbedoMipMaps, opacityMode != MaterialManipulation.OpacityMode.None);
+                QueueExport(textures.Albedo, outputName, effectiveAlbedoCompression, props.bAlbedoMipMaps, opacityMode != MaterialManipulation.OpacityMode.None, color: true);
             }
 
             if (textures.Exponent != null)
@@ -382,7 +383,7 @@ namespace mwb_materials.MwbMats
             {
                 string outputName = job.TextureBaseName + "_emissive";
                 detailName = outputName;
-                QueueExport(textures.Emissive, outputName, props.AlbedoCompression, props.bAlbedoMipMaps);
+                QueueExport(textures.Emissive, outputName, props.AlbedoCompression, props.bAlbedoMipMaps, color: true);
             }
 
             await Task.WhenAll(exports);

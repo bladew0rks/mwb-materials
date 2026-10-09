@@ -178,7 +178,7 @@ public static class PixelFormatConverter
     }
 
     public static void FromRgba8888(ReadOnlySpan<byte> rgba, int width, int height, VtfImageFormat format, byte[] output, int outputOffset, int alphaThreshold = 128,
-        float rdoLambda = 0f)
+        float rdoLambda = 0f, bool perceptual = false)
     {
         switch (format)
         {
@@ -203,7 +203,7 @@ public static class PixelFormatConverter
                     _ => BcFormat.Bc5,
                 };
 
-                BcEncoder.Encode(bcFormat, rgba, width, height, output.AsSpan(outputOffset), alphaThreshold);
+                BcEncoder.Encode(bcFormat, rgba, width, height, output.AsSpan(outputOffset), alphaThreshold, perceptual: perceptual);
 
                 if (rdoLambda > 0f)
                 {
