@@ -25,6 +25,8 @@ public sealed class VtfCreateOptions
 
     public bool AlphaWeightedMipmaps { get; set; }
 
+    public Action<int, int, int, byte[]>? MipmapProcessor { get; set; }
+
     public VtfResizeMethod ResizeMethod { get; set; } = VtfResizeMethod.None;
     public ResampleFilter ResizeFilter { get; set; } = ResampleFilter.Triangle;
 

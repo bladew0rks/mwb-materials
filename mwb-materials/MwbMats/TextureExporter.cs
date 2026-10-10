@@ -70,13 +70,14 @@ namespace mwb_materials.MwbMats
         }
 
         public static string Export(PixelBuffer image, string outputFolder, string outputName, string format, bool mipmaps, Action<string> logFunc, bool alphaIsCoverage = false,
-            bool compress = false, float rdoLambda = 0f, bool perceptual = false)
+            bool compress = false, float rdoLambda = 0f, bool perceptual = false, Action<int, int, int, byte[]> mipmapProcessor = null)
         {
             VtfCreateOptions options = new VtfCreateOptions()
             {
                 Format = ParseFormat(format),
                 GenerateMipmaps = mipmaps,
                 AlphaWeightedMipmaps = alphaIsCoverage,
+                MipmapProcessor = mipmapProcessor,
                 Compression = compress ? VtfCompression.Zstd : VtfCompression.None,
                 CompressionLevel = 6,
                 RdoLambda = rdoLambda,

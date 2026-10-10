@@ -296,6 +296,20 @@ public sealed class VtfFile
         byte[][][] chains = new byte[images.Count][][];
         Parallel.For(0, images.Count, i => chains[i] = BuildMipChain(images[i], width, height, mipmaps, options.MipmapFilter, options.AlphaWeightedMipmaps));
 
+        if (options.MipmapProcessor != null)
+        {
+            foreach (byte[][] chain in chains)
+            {
+                chain[0] = (byte[])chain[0].Clone();
+
+                for (int level = 0; level < mipmaps; level++)
+                {
+                    var (w, h, _) = GetMipmapDimensions(width, height, 1, level);
+                    options.MipmapProcessor(level, w, h, chain[level]);
+                }
+            }
+        }
+
         long dataSize = ComputeImageDataSize(width, height, 1, mipmaps, frames, options.FaceCount, storedFormat);
         file.ImageData = GC.AllocateUninitializedArray<byte>(checked((int)dataSize));
 
