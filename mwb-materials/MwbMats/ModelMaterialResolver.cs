@@ -24,6 +24,7 @@ namespace mwb_materials.MwbMats
         public string VmtFileName { get; }
         public string TextureBaseName { get; }
         public List<string> Files { get; }
+        public PhongMaterialSource Phong { get; init; }
     }
 
     class ModelMaterialResolver

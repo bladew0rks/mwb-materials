@@ -25,36 +25,84 @@
       <ScrollViewer x:Name="SettingsPanel" Grid.Column="0" VerticalScrollBarVisibility="Auto" Padding="0,0,14,0">
         <StackPanel Spacing="12">
 
-          <Border Classes="card">
-            <StackPanel Spacing="4">
-              <TextBlock Text="MAPS" Classes="cardTitle" />
-              <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
-                <CheckBox x:Name="AoCheck" Content="Apply AO to masks" Grid.Row="0" Grid.Column="0" />
-                <CheckBox x:Name="InvertNormalBlueCheck" Content="Invert normal blue" Grid.Row="0" Grid.Column="1"
-                          ToolTip.Tip="Invert the blue channel of the normal map" />
-                <CheckBox x:Name="OpenGlNormalCheck" Content="Flip normal green" Grid.Row="1" Grid.Column="0"
-                          ToolTip.Tip="For OpenGL-style normal maps (Y+)" />
-                <CheckBox x:Name="InvertOpacityCheck" Content="Invert opacity" Grid.Row="1" Grid.Column="1"
-                          ToolTip.Tip="Invert the opacity mask (black becomes opaque, white becomes transparent)" />
-              </Grid>
+          <TabControl x:Name="ModeTabs" Padding="0" Margin="0,-6,0,0">
+            <TabControl.Styles>
+              <Style Selector="TabItem">
+                <Setter Property="FontSize" Value="15" />
+                <Setter Property="MinHeight" Value="36" />
+                <Setter Property="Padding" Value="10,0" />
+              </Style>
+            </TabControl.Styles>
 
-              <Grid ColumnDefinitions="110,*,52" RowDefinitions="Auto,Auto,Auto" Margin="0,6,0,0">
-                <TextBlock Text="AO on albedo" Classes="label" />
-                <Slider x:Name="AoStrengthSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="100"
-                        TickFrequency="5" IsSnapToTickEnabled="True" Margin="8,0" />
-                <TextBlock x:Name="AoStrengthValue" Grid.Column="2" Text="100%" Classes="value" />
+            <TabItem x:Name="PbrTab" Header="PBR textures"
+                     ToolTip.Tip="Build materials from folders of PBR textures (_c, _n, _g, _m, ...)">
+              <Border Classes="card" Margin="0,6,0,0">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="MAPS" Classes="cardTitle" />
+                  <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
+                    <CheckBox x:Name="AoCheck" Content="Apply AO to masks" Grid.Row="0" Grid.Column="0" />
+                    <CheckBox x:Name="InvertNormalBlueCheck" Content="Invert normal blue" Grid.Row="0" Grid.Column="1"
+                              ToolTip.Tip="Invert the blue channel of the normal map" />
+                    <CheckBox x:Name="OpenGlNormalCheck" Content="Flip normal green" Grid.Row="1" Grid.Column="0"
+                              ToolTip.Tip="For OpenGL-style normal maps (Y+)" />
+                    <CheckBox x:Name="InvertOpacityCheck" Content="Invert opacity" Grid.Row="1" Grid.Column="1"
+                              ToolTip.Tip="Invert the opacity mask (black becomes opaque, white becomes transparent)" />
+                  </Grid>
 
-                <TextBlock Grid.Row="1" Text="Alphatest ref" Classes="label" />
-                <Slider x:Name="AlphatestSlider" Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="100" Value="50"
-                        TickFrequency="1" IsSnapToTickEnabled="True" Margin="8,0"
-                        ToolTip.Tip="$alphatestreference (threshold for $alphatest)" />
-                <TextBlock x:Name="AlphatestValue" Grid.Row="1" Grid.Column="2" Text="0.50" Classes="value" />
+                  <Grid ColumnDefinitions="110,*,52" RowDefinitions="Auto,Auto" Margin="0,6,0,0">
+                    <TextBlock Text="AO on albedo" Classes="label" />
+                    <Slider x:Name="AoStrengthSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="100"
+                            TickFrequency="5" IsSnapToTickEnabled="True" Margin="8,0" />
+                    <TextBlock x:Name="AoStrengthValue" Grid.Column="2" Text="100%" Classes="value" />
 
-                <TextBlock Grid.Row="2" Text="Max size" Classes="label" />
-                <ComboBox x:Name="ClampComboBox" Grid.Row="2" Grid.Column="1" Margin="8,4,8,0" />
-              </Grid>
-            </StackPanel>
-          </Border>
+                    <TextBlock Grid.Row="1" Text="Alphatest ref" Classes="label" />
+                    <Slider x:Name="AlphatestSlider" Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="100" Value="50"
+                            TickFrequency="1" IsSnapToTickEnabled="True" Margin="8,0"
+                            ToolTip.Tip="$alphatestreference (threshold for $alphatest)" />
+                    <TextBlock x:Name="AlphatestValue" Grid.Row="1" Grid.Column="2" Text="0.50" Classes="value" />
+                  </Grid>
+
+                  <CheckBox x:Name="UseModelMaterialNamesCheck" Content="Use model material names" Margin="0,4,0,0"
+                            ToolTip.Tip="Use SMD material names and glTF/GLB texture bindings when available" />
+                </StackPanel>
+              </Border>
+            </TabItem>
+
+            <TabItem x:Name="PhongTab" Header="Phong to SurfaceGGX"
+                     ToolTip.Tip="Convert existing VertexLitGeneric phong materials (VMT + VTF inside a materials folder) to PBR">
+              <Border Classes="card" Margin="0,6,0,0">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="PHONG" Classes="cardTitle" />
+                  <TextBlock Classes="label" TextWrapping="Wrap" FontSize="12"
+                             Text="Open a materials folder (or any folder inside one). Metalness gets extracted from the exponent texture's green channel, gloss from its red channel." />
+
+                  <CheckBox x:Name="PhongFromMwbMatsCheck" Content="Made with MWB Mats" Margin="0,4,0,0"
+                            ToolTip.Tip="The phong materials were made by this tool, so albedo, gloss and metalness are read back exactly instead of estimated" />
+
+                  <Grid ColumnDefinitions="110,*,52" RowDefinitions="Auto,Auto,Auto" Margin="0,6,0,0"
+                        IsEnabled="{Binding !#PhongFromMwbMatsCheck.IsChecked}">
+                    <TextBlock Text="Metal boost" Classes="label" />
+                    <Slider x:Name="PhongMetalBoostSlider" Grid.Column="1" Minimum="1" Maximum="10" Value="4.5"
+                            TickFrequency="0.25" IsSnapToTickEnabled="True" Margin="8,0"
+                            ToolTip.Tip="How much metal albedo is brightened. Phong materials keep metal dark and light it with $phongalbedoboost." />
+                    <TextBlock x:Name="PhongMetalBoostValue" Grid.Column="2" Text="4.50" Classes="value" />
+
+                    <TextBlock Grid.Row="1" Text="Metal max" Classes="label" />
+                    <Slider x:Name="PhongMetalMaxSlider" Grid.Row="1" Grid.Column="1" Minimum="0.2" Maximum="1" Value="0.65"
+                            TickFrequency="0.01" IsSnapToTickEnabled="True" Margin="8,0"
+                            ToolTip.Tip="Brightest linear albedo a boosted metal can reach" />
+                    <TextBlock x:Name="PhongMetalMaxValue" Grid.Row="1" Grid.Column="2" Text="0.65" Classes="value" />
+
+                    <TextBlock Grid.Row="2" Text="Gloss variation" Classes="label" />
+                    <Slider x:Name="PhongGlossVariationSlider" Grid.Row="2" Grid.Column="1" Minimum="0" Maximum="100" Value="30"
+                            TickFrequency="5" IsSnapToTickEnabled="True" Margin="8,0"
+                            ToolTip.Tip="How much the phong mask (normal or base alpha) varies the gloss, so wear and scratches stay visible" />
+                    <TextBlock x:Name="PhongGlossVariationValue" Grid.Row="2" Grid.Column="2" Text="30%" Classes="value" />
+                  </Grid>
+                </StackPanel>
+              </Border>
+            </TabItem>
+          </TabControl>
 
           <Border Classes="card">
             <StackPanel Spacing="6">
@@ -77,6 +125,10 @@
           <Border Classes="card">
             <StackPanel>
               <TextBlock Text="VTF" Classes="cardTitle" />
+              <Grid ColumnDefinitions="90,*" Margin="0,0,0,8">
+                <TextBlock Text="Max size" VerticalAlignment="Center" />
+                <ComboBox x:Name="ClampComboBox" Grid.Column="1" Margin="8,0,0,0" />
+              </Grid>
               <Grid ColumnDefinitions="90,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6">
                 <TextBlock Text="Texture" Classes="label" FontSize="12" />
                 <TextBlock Grid.Column="1" Text="Format" Classes="label" FontSize="12" Margin="8,0" />
@@ -107,8 +159,6 @@
           <Border Classes="card">
             <StackPanel Spacing="4">
               <TextBlock Text="BATCH" Classes="cardTitle" />
-              <CheckBox x:Name="UseModelMaterialNamesCheck" Content="Use model material names"
-                        ToolTip.Tip="Use SMD material names and glTF/GLB texture bindings when available" />
               <CheckBox x:Name="KeepIntermediatesCheck" Content="Keep intermediate textures"
                         ToolTip.Tip="Save the processed textures and extracted channels as PNGs in temp_debug" />
               <Grid ColumnDefinitions="110,*,Auto" RowDefinitions="Auto,Auto" RowSpacing="8" Margin="0,6,0,0">

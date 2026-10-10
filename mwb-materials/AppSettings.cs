@@ -21,6 +21,11 @@ namespace mwb_materials
         public bool BatchIncludeFolders { get; set; }
         public bool KeepIntermediates { get; set; }
         public bool UseModelMaterialNames { get; set; }
+        public bool PhongMode { get; set; }
+        public float PhongMetalBoost { get; set; } = 4.5f;
+        public float PhongMetalMax { get; set; } = 0.65f;
+        public float PhongGlossVariation { get; set; } = 0.3f;
+        public bool PhongFromMwbMats { get; set; }
         public string AlbedoCompression { get; set; } = "DXT5";
         public string NormalCompression { get; set; } = "RGBA8888";
         public string ExponentCompression { get; set; } = "DXT5";

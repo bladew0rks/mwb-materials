@@ -27,6 +27,8 @@ namespace mwb_materials.MwbMats
             public string RdoLevel { get; set; }
             public bool bKeepIntermediates { get; set; }
             public bool bUseModelMaterialNames { get; set; }
+            public bool bConvertPhongMaterials { get; set; }
+            public PhongConversionSettings PhongSettings { get; set; }
             public float AlphatestReference { get; set; }
             public VmtPreset VmtPreset { get; set; }
 
@@ -111,7 +113,10 @@ namespace mwb_materials.MwbMats
                     {
                         try
                         {
-                            decoded[index].TrySetResult(await MaterialManipulation.LoadSources(jobs[index].Job.Files, pipeline.Token));
+                            TextureGenerationJob job = jobs[index].Job;
+                            decoded[index].TrySetResult(job.Phong != null
+                                ? await PhongMaterialImporter.LoadAsync(job, pipeline.Token)
+                                : await MaterialManipulation.LoadSources(job.Files, pipeline.Token));
                         }
                         catch (Exception ex)
                         {
@@ -152,7 +157,9 @@ namespace mwb_materials.MwbMats
                         jobProps.GenerateProps = generateProps;
                     }
 
-                    jobProps.LogFunc?.Invoke("Processing " + pending.Job.DisplayName + " (" + pending.Job.Files.Count + " source textures)");
+                    jobProps.LogFunc?.Invoke(pending.Job.Phong != null
+                        ? "Processing " + pending.Job.DisplayName + " (phong material, " + pending.Job.Phong.Materials.Count + " vmt" + (pending.Job.Phong.Materials.Count == 1 ? "" : "s") + ")"
+                        : "Processing " + pending.Job.DisplayName + " (" + pending.Job.Files.Count + " source textures)");
 
                     try
                     {
@@ -219,17 +226,28 @@ namespace mwb_materials.MwbMats
                 .Where(ImageLoader.IsSupportedImage)
                 .ToList();
 
-            if (sanitizedFiles.Count <= 0 && !props.bUseModelMaterialNames)
+            List<TextureGenerationJob> jobs;
+
+            if (props.bConvertPhongMaterials)
             {
-                return new List<TextureGenerationJob>();
+                jobs = PhongMaterialImporter.HasVmtFiles(path)
+                    ? PhongMaterialImporter.Resolve(path, props.PhongSettings, props.LogFunc)
+                    : new List<TextureGenerationJob>();
             }
+            else
+            {
+                if (sanitizedFiles.Count <= 0 && !props.bUseModelMaterialNames)
+                {
+                    return new List<TextureGenerationJob>();
+                }
 
-            string folderName = Path.GetFileName(path);
-            List<TextureGenerationJob> jobs = props.bUseModelMaterialNames
-                ? ModelMaterialResolver.Resolve(path, startPath, sanitizedFiles, props.LogFunc)
-                : new List<TextureGenerationJob>() { new TextureGenerationJob(folderName, string.Empty, folderName + ".vmt", folderName, sanitizedFiles) };
+                string folderName = Path.GetFileName(path);
+                jobs = props.bUseModelMaterialNames
+                    ? ModelMaterialResolver.Resolve(path, startPath, sanitizedFiles, props.LogFunc)
+                    : new List<TextureGenerationJob>() { new TextureGenerationJob(folderName, string.Empty, folderName + ".vmt", folderName, sanitizedFiles) };
 
-            jobs = jobs.Where(job => job.Files.Count > 0).ToList();
+                jobs = jobs.Where(job => job.Files.Count > 0).ToList();
+            }
 
             if (jobs.Count <= 0)
             {
@@ -428,7 +446,7 @@ namespace mwb_materials.MwbMats
                     vmtValues.Add("METAL", "1");
                 }
 
-                VmtGenerator.Generate(exportPath, job.VmtFileName, vmtValues, props.VmtPreset, props.LogFunc);
+                WriteVmts(exportPath, job, vmtValues, props);
                 return;
             }
 
@@ -456,7 +474,17 @@ namespace mwb_materials.MwbMats
             TextureExporter.WriteAllBytesLocked(Path.Combine(envPath, envmapTexture.Name + ".vtf"), envmapTexture.Content);
 
             //generate vmt
-            VmtGenerator.Generate(exportPath, job.VmtFileName, vmtValues, props.VmtPreset, props.LogFunc);
+            WriteVmts(exportPath, job, vmtValues, props);
+        }
+
+        private static void WriteVmts(string exportPath, TextureGenerationJob job, Dictionary<string, object> vmtValues, BatchProperties props)
+        {
+            string vmtPath = VmtGenerator.Generate(exportPath, job.VmtFileName, vmtValues, props.VmtPreset, props.LogFunc);
+
+            if (job.Phong != null)
+            {
+                PhongMaterialImporter.WriteMaterialVmts(job, vmtPath, props.LogFunc);
+            }
         }
 
         private static string GetDetailBlock(string exportPath, string detailName)

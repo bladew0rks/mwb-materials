@@ -61,7 +61,7 @@ namespace mwb_materials
             BrowseEnvMapsButton.Click += async (sender, args) => await BrowseInto(EnvMapsDestination, "Envmaps folder");
 
             foreach (CheckBox check in new[] { AoCheck, OpenGlNormalCheck, InvertNormalBlueCheck, InvertOpacityCheck, KeepIntermediatesCheck,
-                UseModelMaterialNamesCheck, BatchMoveOutputCheck, BatchIncludeFoldersCheck, AlbedoMipMapsCheck, NormalMipMapsCheck, ExponentMipMapsCheck, CompressVtfsCheck })
+                UseModelMaterialNamesCheck, PhongFromMwbMatsCheck, BatchMoveOutputCheck, BatchIncludeFoldersCheck, AlbedoMipMapsCheck, NormalMipMapsCheck, ExponentMipMapsCheck, CompressVtfsCheck })
             {
                 check.IsCheckedChanged += (sender, args) => SaveSettings();
             }
@@ -77,9 +77,18 @@ namespace mwb_materials
                 SaveSettings();
             };
 
-            AlphatestSlider.ValueChanged += (sender, args) =>
+            foreach (Slider slider in new[] { AlphatestSlider, PhongMetalBoostSlider, PhongMetalMaxSlider, PhongGlossVariationSlider })
             {
-                UpdateSliderLabels();
+                slider.ValueChanged += (sender, args) =>
+                {
+                    UpdateSliderLabels();
+                    SaveSettings();
+                };
+            }
+
+            ModeTabs.SelectionChanged += (sender, args) =>
+            {
+                UpdateModeLabels();
                 SaveSettings();
             };
 
@@ -123,6 +132,12 @@ namespace mwb_materials
 
                 AoStrengthSlider.Value = Math.Clamp(source.AoAlbedoStrength, 0, 100);
                 AlphatestSlider.Value = Math.Clamp(source.AlphatestReference, 0, 100);
+                PhongMetalBoostSlider.Value = Math.Clamp(source.PhongMetalBoost, PhongMetalBoostSlider.Minimum, PhongMetalBoostSlider.Maximum);
+                PhongMetalMaxSlider.Value = Math.Clamp(source.PhongMetalMax, PhongMetalMaxSlider.Minimum, PhongMetalMaxSlider.Maximum);
+                PhongGlossVariationSlider.Value = Math.Clamp(source.PhongGlossVariation * 100, 0, 100);
+                PhongFromMwbMatsCheck.IsChecked = source.PhongFromMwbMats;
+                ModeTabs.SelectedItem = source.PhongMode ? PhongTab : PbrTab;
+                UpdateModeLabels();
                 ParallelMaterialsUpDown.Value = Math.Clamp(source.ParallelMaterials, 1, 16);
                 UpdateSliderLabels();
 
@@ -139,6 +154,7 @@ namespace mwb_materials
         {
             AppSettings defaults = new AppSettings()
             {
+                PhongMode = IsPhongMode,
                 DestinationFolder = VmtDestinationPath.Text,
                 EnvMapsFolder = EnvMapsDestination.Text
             };
@@ -163,6 +179,11 @@ namespace mwb_materials
             settings.InvertOpacity = InvertOpacityCheck.IsChecked == true;
             settings.KeepIntermediates = KeepIntermediatesCheck.IsChecked == true;
             settings.UseModelMaterialNames = UseModelMaterialNamesCheck.IsChecked == true;
+            settings.PhongMode = IsPhongMode;
+            settings.PhongMetalBoost = (float)PhongMetalBoostSlider.Value;
+            settings.PhongMetalMax = (float)PhongMetalMaxSlider.Value;
+            settings.PhongGlossVariation = (float)(PhongGlossVariationSlider.Value / 100.0);
+            settings.PhongFromMwbMats = PhongFromMwbMatsCheck.IsChecked == true;
             settings.AoAlbedoStrength = (int)AoStrengthSlider.Value;
             settings.AlphatestReference = (int)AlphatestSlider.Value;
             settings.ClampSize = ClampComboBox.SelectedItem as string ?? "4096";
@@ -191,6 +212,24 @@ namespace mwb_materials
         {
             AoStrengthValue.Text = (int)AoStrengthSlider.Value + "%";
             AlphatestValue.Text = (AlphatestSlider.Value / 100.0).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+            PhongMetalBoostValue.Text = PhongMetalBoostSlider.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+            PhongMetalMaxValue.Text = PhongMetalMaxSlider.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+            PhongGlossVariationValue.Text = (int)PhongGlossVariationSlider.Value + "%";
+        }
+
+        private bool IsPhongMode => ModeTabs.SelectedItem == PhongTab;
+
+        private void UpdateModeLabels()
+        {
+            if (IsBatchRunning)
+            {
+                return;
+            }
+
+            FolderButton.Content = IsPhongMode ? "Open materials folder…" : "Open folder…";
+            SetStatus(IsPhongMode
+                ? "Pick a materials folder (or a folder inside one) with phong VMTs to convert."
+                : "Pick a material folder (or a folder of material folders) to convert.", null);
         }
 
         #endregion
@@ -280,7 +319,8 @@ namespace mwb_materials
 
         private async void FolderButton_Click(object sender, RoutedEventArgs e)
         {
-            string batchPath = await PickFolder("Select a material folder or a folder of material folders", settings.LastBatchFolder);
+            bool phongMode = IsPhongMode;
+            string batchPath = await PickFolder(phongMode ? "Select a materials folder with phong VMTs" : "Select a material folder or a folder of material folders", settings.LastBatchFolder);
 
             if (string.IsNullOrEmpty(batchPath))
             {
@@ -317,7 +357,15 @@ namespace mwb_materials
                 bCompressVtfs = CompressVtfsCheck.IsChecked == true,
                 RdoLevel = RdoComboBox.SelectedItem as string ?? TextureExporter.RdoOff,
                 bKeepIntermediates = KeepIntermediatesCheck.IsChecked == true,
-                bUseModelMaterialNames = UseModelMaterialNamesCheck.IsChecked == true,
+                bUseModelMaterialNames = !phongMode && UseModelMaterialNamesCheck.IsChecked == true,
+                bConvertPhongMaterials = phongMode,
+                PhongSettings = new PhongConversionSettings()
+                {
+                    MetalBoost = (float)PhongMetalBoostSlider.Value,
+                    MetalMax = (float)PhongMetalMaxSlider.Value,
+                    GlossMaskInfluence = (float)(PhongGlossVariationSlider.Value / 100.0),
+                    FromMwbMats = PhongFromMwbMatsCheck.IsChecked == true
+                },
                 VmtPreset = GetSelectedVmtPreset(),
                 AlphatestReference = (float)(AlphatestSlider.Value / 100.0),
                 MaxParallelJobs = (int)(ParallelMaterialsUpDown.Value ?? 1),
@@ -344,7 +392,7 @@ namespace mwb_materials
 
                 if (materials == 0)
                 {
-                    SetStatus("No source textures found in " + batchPath, "ErrorBrush");
+                    SetStatus((phongMode ? "No phong materials found in " : "No source textures found in ") + batchPath, "ErrorBrush");
                 }
                 else
                 {
@@ -386,6 +434,8 @@ namespace mwb_materials
 
             SetStatus(status, null);
         }
+
+        private bool IsBatchRunning => batchCancellation != null;
 
         private void SetBatchRunning(bool running)
         {
